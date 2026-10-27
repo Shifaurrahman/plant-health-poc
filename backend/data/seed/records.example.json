@@ -1,0 +1,30 @@
+[
+  {
+    "record_id": "rec_brinjal_001",
+    "crop": "brinjal",
+    "condition": "Bacterial Leaf Spot",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "TODO: expert to write from the reviewed source",
+    "distinguishing_features": "TODO: expert to write",
+    "alternatives": ["Cercospora Leaf Spot"],
+    "management_general": "TODO: preventive practices from reviewed source only",
+    "source_id": "src_slif_brinjal",
+    "review_status": "pending",
+    "images": []
+  },
+  {
+    "record_id": "rec_brinjal_002",
+    "crop": "brinjal",
+    "condition": "Cercospora Leaf Spot",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "TODO: expert to write from the reviewed source",
+    "distinguishing_features": "TODO: expert to write",
+    "alternatives": ["Bacterial Leaf Spot"],
+    "management_general": "TODO: preventive practices from reviewed source only",
+    "source_id": "src_slif_brinjal",
+    "review_status": "pending",
+    "images": []
+  }
+]

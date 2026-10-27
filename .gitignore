@@ -6,6 +6,38 @@ __pycache__/
 # C extensions
 *.so
 
+sri_lanka_brinjal/
+
+# Python / backend
+backend/.venv/
+**/__pycache__/
+*.pyc
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Datasets and generated data (do not commit)
+backend/data/raw/
+backend/data/uploads/
+backend/data/embeddings/
+backend/data/results/
+backend/data/splits/
+backend/data/seed/records.json
+*.npz
+*.zip
+*.bin
+*.safetensors
+
+# Mac/Windows junk
+.DS_Store
+Thumbs.db
+
+# Secrets and local env
+.env
+.env.*
+kaggle.json
+
 # Distribution / packaging
 .Python
 build/
