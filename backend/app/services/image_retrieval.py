@@ -1,25 +1,18 @@
 """Match uploaded photos against approved reference photos (CLIP embeddings).
 
-Reference library = rows of INDEX_CSV (Raw photos, test photos excluded) that have a
-cached embedding. A reference photo is used only if its class has an approved record.
+Reference library = rows of INDEX_CSV (Raw photos, test photos excluded) that have a cached
+embedding. A reference photo is used only if its class has an approved record.
+A photo listed in a record's "images" field is linked to that record directly.
 """
 import csv
 from collections import defaultdict
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 
+from app.config import CROP, EMBED_CACHE, INDEX_CSV, TOP_K
 from app.services.embedder import embed_image_file
 from app.store import store
-
-BASE_DIR = Path(__file__).resolve().parents[2]  # backend/
-INDEX_CSV = BASE_DIR / "data" / "splits" / "main_index.csv"
-EMBED_CACHE = BASE_DIR / "data" / "embeddings" / "ViT-B-32.npz"
-CROP = "brinjal"
-TOP_K = 5
-# Classes that scored weakly in evaluation. Answers flag these as uncertain.
-WEAK_CLASSES = {"Mosaic Virus", "Powdery Mildew"}
 
 
 @lru_cache(maxsize=1)
@@ -38,29 +31,43 @@ def _reference_library():
     return feats, labels, paths
 
 
-def _approved_record(label: str) -> dict | None:
+def _approved_by_label() -> dict[str, dict]:
+    out: dict[str, dict] = {}
     for rec in store.approved_records():
-        if rec.get("crop", "").lower() == CROP and rec.get("condition", "").lower() == label.lower():
-            return rec
-    return None
+        if rec.get("crop", "").lower() == CROP:
+            out.setdefault(rec.get("condition", "").lower(), rec)
+    return out
 
 
 def match_image(image_path: str, top_k: int = TOP_K) -> list[dict]:
     """Top-k reference photos for one uploaded image, restricted to approved classes."""
     feats, labels, paths = _reference_library()
-    approved = {lab: rec for lab in set(labels) if (rec := _approved_record(lab))}
-    if not approved:
+    by_label = _approved_by_label()
+    link = {}
+    for rec in store.approved_records():
+        for img in rec.get("images") or []:
+            if img.get("image_path"):
+                link[img["image_path"]] = rec
+
+    usable = [i for i, lab in enumerate(labels) if lab.lower() in by_label]
+    if not usable:
         return []
-    idx = np.array([i for i, lab in enumerate(labels) if lab in approved])
+    idx = np.array(usable)
     q = embed_image_file(image_path)
     sims = feats[idx] @ q
     order = np.argsort(-sims)[:top_k]
-    return [{
-        "id": paths[idx[j]],
-        "class": labels[idx[j]],
-        "similarity": round(float(sims[j]), 3),
-        "record": approved[labels[idx[j]]],
-    } for j in order]
+    out = []
+    for j in order:
+        i = idx[j]
+        rec = link.get(paths[i]) or by_label[labels[i].lower()]
+        out.append({
+            "id": paths[i],
+            "class": labels[i],
+            "similarity": round(float(sims[j]), 3),
+            "record": rec,
+            "channel": "image_to_image",
+        })
+    return out
 
 
 def evidence_from_matches(matches: list[dict]) -> list[dict]:
@@ -68,9 +75,15 @@ def evidence_from_matches(matches: list[dict]) -> list[dict]:
         "id": m["id"],
         "type": "image",
         "title": f"{m['class']} reference photo",
-        "source": m["record"].get("source_id"),
-        "status": m["record"].get("review_status"),
+        "condition": m["class"],
+        "record_id": m["record"].get("record_id"),
+        "source_id": m["record"].get("source_id"),
+        "review_status": m["record"].get("review_status"),
+        "reviewed_by": m["record"].get("reviewed_by"),
+        "reviewed_on": m["record"].get("reviewed_on"),
         "similarity": m["similarity"],
+        "channel": m.get("channel") or "image_to_image",
+        "label_basis": m["record"].get("label_basis"),
     } for m in matches]
 
 
@@ -82,13 +95,14 @@ def candidates_from_matches(matches: list[dict]) -> list[dict]:
     ranked = sorted(by_class.items(), key=lambda kv: (-len(kv[1]), -max(x["similarity"] for x in kv[1])))
     out = []
     for label, ms in ranked:
-        mean_sim = sum(x["similarity"] for x in ms) / len(ms)
+        rec = ms[0]["record"]
         against = ["Visual similarity only. Not confirmed by inspection or lab test."]
-        if label in WEAK_CLASSES:
-            against.append("This class matched weakly in evaluation. Treat this result as uncertain.")
+        if rec.get("weak_in_evaluation"):
+            against.append(rec.get("evaluation_note")
+                           or "This class matched weakly in evaluation. Treat this result as uncertain.")
         out.append({
             "name": label,
-            "support": [f"{len(ms)} of {total} nearest reference photos", f"mean similarity {mean_sim:.2f}"],
+            "support": [f"Matched {len(ms)} of {total} nearest reference photos"],
             "against_or_missing": against,
             "evidence_ids": [x["id"] for x in ms],
         })

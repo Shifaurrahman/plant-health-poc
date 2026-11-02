@@ -1,43 +1,49 @@
-# Plant Health POC: backend
+# Plant Health Assistant — backend
+
+Python FastAPI service implementing the plan v1.0 workflow: deterministic routing,
+multimodal retrieval, structured VLM outputs (stub or Anthropic), expert review and
+knowledge publication.
 
 ## Run
+
 ```bash
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
-Docs: http://localhost:8000/docs
 
-## Test with curl
+Docs: http://127.0.0.1:8000/docs  
+Health: http://127.0.0.1:8000/health
+
+## Smoke tests
+
 ```bash
-# 1. create a case
-curl -X POST localhost:8000/cases -H "Content-Type: application/json" \
-  -d '{"crop":"brinjal","region":"Sri Lanka"}'
-
-# 2. send a question (and optionally images) to that case
-curl -X POST localhost:8000/cases/<case_id>/messages \
-  -F "text=brown spots on lower leaves" -F "files=@leaf.jpg"
+python tests/smoke_test.py
 ```
 
-## Adding knowledge
-1. Copy `data/seed/records.example.json` to `data/seed/records.json`.
-2. Fill in symptoms and distinguishing features from a reviewed source.
-3. Set `review_status` to `approved` only after expert sign-off. Pending records never reach retrieval.
-4. Restart the server.
+Uses a fake embedder (no CLIP download).
 
-## Status
-- Working: case creation, image upload (type and count checks), keyword retrieval over approved records, evidence validation, unknown-coverage outcome.
-- Stub: VLM (`PH_VLM_PROVIDER=stub`). Replace `app/services/vlm.py` with a real adapter.
-- Not yet: multimodal embeddings, FAISS index, persistent storage, auth, file-size limits.
+## Knowledge
 
-## Downloading datasets
-The sandbox cannot reach Kaggle or Mendeley. Run the script on your own machine:
-```bash
-# Kaggle: one-time setup, get kaggle.json from kaggle.com > Settings > API
-pip install kaggle
-mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
+1. Copy `data/seed/records.example.json` → `data/seed/records.json` (or convert CSV with `scripts/records_from_csv.py`).
+2. Copy `data/seed/sources.example.json` → `data/seed/sources.json`.
+3. Set `review_status` to `approved` only after expert sign-off.
+4. Restart the server after replacing the seed file. In-app approve/retire writes back to `records.json`.
 
-# Mendeley: copy the link from the download button in your browser (right-click > Copy link address)
-BRINJAL_ZIP_URL="<paste link>" TEA_ZIP_URL="<paste link>" bash scripts/download_datasets.sh
-```
+## Evaluation fixtures
+
+Copy `data/eval/cases.example.json` → `data/eval/cases.json` for `POST /eval/run`.
+Keep evaluation images out of `main_index.csv`.
+
+## Key modules
+
+| Module | Role |
+|---|---|
+| `services/routing.py` | image_assessment / text_qa / followup |
+| `services/pipeline.py` | observe → retrieve → synthesise → validate |
+| `services/evidence.py` | merge channels, diversify 4–8 evidence items |
+| `services/photo_guidance.py` | why whole-plant / close-up / underside help |
+| `services/eval_suite.py` | release-gate checks |
+| `store.py` | SQLite cases, reviews, gaps + seed records |

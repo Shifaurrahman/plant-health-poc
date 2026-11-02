@@ -1,9 +1,16 @@
 [
   {
     "record_id": "rec_brinjal_001",
+    "condition_id": "bacterial_leaf_spot",
     "crop": "brinjal",
     "condition": "Bacterial Leaf Spot",
     "category": "disease",
+    "affected_organs": ["leaf"],
+    "progression": null,
+    "context": null,
+    "label_basis": "expert_suspected",
+    "publication_status": "pending",
+    "version": "1",
     "synonyms": [],
     "symptoms": "TODO: expert to write from the reviewed source",
     "distinguishing_features": "TODO: expert to write",
@@ -11,20 +18,28 @@
     "management_general": "TODO: preventive practices from reviewed source only",
     "source_id": "src_slif_brinjal",
     "review_status": "pending",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [],
+    "next_step": null,
     "images": []
   },
   {
     "record_id": "rec_brinjal_002",
     "crop": "brinjal",
-    "condition": "Cercospora Leaf Spot",
+    "condition": "Mosaic Virus",
     "category": "disease",
     "synonyms": [],
     "symptoms": "TODO: expert to write from the reviewed source",
     "distinguishing_features": "TODO: expert to write",
-    "alternatives": ["Bacterial Leaf Spot"],
+    "alternatives": [],
     "management_general": "TODO: preventive practices from reviewed source only",
     "source_id": "src_slif_brinjal",
     "review_status": "pending",
+    "weak_in_evaluation": true,
+    "evaluation_note": "Matched weakly in farm-level evaluation. Treat this result as uncertain.",
+    "limitations": [],
+    "next_step": null,
     "images": []
   }
 ]

@@ -1,0 +1,16 @@
+[
+  {
+    "id": "eval_unknown_01",
+    "crop": "brinjal",
+    "question": "brown patches on lower leaves",
+    "expected_outcome": "no_match",
+    "notes": "Placeholder. Keep evaluation photos out of the reference index. Replace with expert-reviewed field cases."
+  },
+  {
+    "id": "eval_text_01",
+    "crop": "brinjal",
+    "question": "What does our information say about preventing Little Leaf?",
+    "expected_outcome": "text_only_match",
+    "notes": "Text-only management question for citation and coverage checks."
+  }
+]

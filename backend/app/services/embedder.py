@@ -1,15 +1,18 @@
 """CLIP image embedder. Loaded once, on first use.
 
-Same model and preprocessing as scripts/evaluate_retrieval.py, so query embeddings
-are comparable with the cached reference embeddings.
+Model name and weights come from config.py (PH_CLIP_MODEL / PH_CLIP_PRETRAINED).
+Same settings must match the embedding cache used by image_retrieval.
 """
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
-MODEL = "ViT-B-32"
-PRETRAINED = "laion2b_s34b_b79k"
+from app.config import CLIP_MODEL, CLIP_PRETRAINED
+
+# Re-exported so versions.py and scripts can import a single name.
+MODEL = CLIP_MODEL
+PRETRAINED = CLIP_PRETRAINED
 
 
 @lru_cache(maxsize=1)
@@ -31,3 +34,15 @@ def embed_image_file(path: str | Path) -> np.ndarray:
         f = model.encode_image(img)
         f = f / f.norm(dim=-1, keepdim=True)
     return f.cpu().numpy()[0]
+
+
+def encode_text(texts: list[str]) -> np.ndarray:
+    """CLIP text encoder, same model and embedding space as the images. Unit-length rows."""
+    import open_clip
+
+    model, _, torch = _load()
+    tokens = open_clip.get_tokenizer(MODEL)(texts)  # long text is truncated to the 77-token context
+    with torch.no_grad():
+        t = model.encode_text(tokens)
+        t = t / t.norm(dim=-1, keepdim=True)
+    return t.cpu().numpy()
