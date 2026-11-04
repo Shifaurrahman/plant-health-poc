@@ -14,8 +14,10 @@ Usage (run from backend/):
     python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits --index all
     python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits --dry-run
 
-First real run needs internet to download the CLIP weights (about 350 MB):
-    pip install torch open_clip_torch pillow numpy
+Model: Qwen3-VL-Embedding (PH_EMBED_MODEL in .env / app/config.py). It must be the SAME model the
+backend uses, so this script calls app.services.embedder instead of loading a model of its own.
+First real run downloads the weights and needs the Qwen3-VL-Embedding repo on PH_QWEN_REPO_DIR.
+Use a GPU if you can; the cache build embeds every reference photo once.
 
 --dry-run uses random vectors. It checks the pipeline only and its scores mean nothing.
 Embeddings are cached in data/embeddings/ so reruns are fast.
@@ -31,8 +33,9 @@ from pathlib import Path
 
 import numpy as np
 
-MODEL = "ViT-B-32"
-PRETRAINED = "laion2b_s34b_b79k"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # so "app" is importable from scripts/
+from app.config import EMBED_BATCH, EMBED_CACHE  # noqa: E402
+from app.services.embedder import MODEL, embed_image_files  # noqa: E402
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -40,22 +43,13 @@ def read_csv(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def embed_clip(paths: list[str], dataset_root: Path, batch: int = 32) -> np.ndarray:
-    import open_clip
-    import torch
-    from PIL import Image
-
-    model, _, preprocess = open_clip.create_model_and_transforms(MODEL, pretrained=PRETRAINED)
-    model.eval()
+def embed_model(paths: list[str], dataset_root: Path, batch: int = EMBED_BATCH) -> np.ndarray:
+    """Embed reference/test photos with the same embedder the backend uses at request time."""
     feats = []
-    with torch.no_grad():
-        for i in range(0, len(paths), batch):
-            imgs = torch.stack([preprocess(Image.open(dataset_root / p).convert("RGB"))
-                                for p in paths[i:i + batch]])
-            f = model.encode_image(imgs)
-            f = f / f.norm(dim=-1, keepdim=True)
-            feats.append(f.cpu().numpy())
-            print(f"  embedded {min(i + batch, len(paths))}/{len(paths)}", end="\r")
+    for i in range(0, len(paths), batch):
+        chunk = [dataset_root / p for p in paths[i:i + batch]]
+        feats.append(embed_image_files(chunk, batch))
+        print(f"  embedded {min(i + batch, len(paths))}/{len(paths)}", end="\r")
     print()
     return np.concatenate(feats)
 
@@ -70,7 +64,8 @@ def embed_dry(paths: list[str]) -> np.ndarray:
     return np.array(feats)
 
 
-def get_embeddings(paths: list[str], dataset_root: Path, cache_file: Path, dry: bool) -> dict[str, np.ndarray]:
+def get_embeddings(paths: list[str], dataset_root: Path, cache_file: Path, dry: bool,
+                   batch: int = EMBED_BATCH) -> dict[str, np.ndarray]:
     cache: dict[str, np.ndarray] = {}
     if cache_file.exists():
         data = np.load(cache_file, allow_pickle=True)
@@ -78,7 +73,7 @@ def get_embeddings(paths: list[str], dataset_root: Path, cache_file: Path, dry: 
     missing = [p for p in paths if p not in cache]
     if missing:
         print(f"Embedding {len(missing)} new images ({'dry run' if dry else MODEL})")
-        new = embed_dry(missing) if dry else embed_clip(missing, dataset_root)
+        new = embed_dry(missing) if dry else embed_model(missing, dataset_root, batch)
         cache.update(zip(missing, new))
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         np.savez(cache_file, paths=np.array(list(cache.keys())), feats=np.stack(list(cache.values())))
@@ -115,6 +110,7 @@ def main() -> None:
     ap.add_argument("--index", choices=["originals", "all"], default="originals")
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--batch", type=int, default=EMBED_BATCH, help="images per embedding batch")
     ap.add_argument("--test-file", help="default: <splits>/main_test.csv")
     ap.add_argument("--index-file", help="default: <splits>/main_index.csv")
     args = ap.parse_args()
@@ -132,9 +128,10 @@ def main() -> None:
     classes = sorted({r["class"] for r in test})
     print(f"Index: {len(index_rows)} images ({args.index}). Test queries: {len(test)}. Classes: {len(classes)}")
 
-    cache_file = Path("data/embeddings") / f"{'dryrun' if args.dry_run else MODEL}.npz"
+    # Same file the backend reads (EMBED_CACHE), so evaluating and serving always use one cache.
+    cache_file = Path("data/embeddings/dryrun.npz") if args.dry_run else EMBED_CACHE
     all_paths = sorted({r["relative_path"] for r in index_rows} | {r["relative_path"] for r in test})
-    emb = get_embeddings(all_paths, dataset_root, cache_file, args.dry_run)
+    emb = get_embeddings(all_paths, dataset_root, cache_file, args.dry_run, args.batch)
 
     idx_feats = np.stack([emb[r["relative_path"]] for r in index_rows])
     idx_labels = [r["class"] for r in index_rows]
@@ -142,7 +139,7 @@ def main() -> None:
     truth = [r["class"] for r in test]
 
     results = {"index": args.index, "index_size": len(index_rows), "test_size": len(test),
-               "model": "dry-run" if args.dry_run else f"{MODEL}/{PRETRAINED}", "runs": {}}
+               "model": "dry-run" if args.dry_run else MODEL, "runs": {}}
     for k in sorted({1, args.k}):
         preds = predict(q_feats, idx_feats, idx_labels, k)
         correct = sum(p == t for p, t in zip(preds, truth))
@@ -166,7 +163,8 @@ def main() -> None:
 
     out_dir = Path("data/results")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f"retrieval_{split_tag}_{args.index}{'_dryrun' if args.dry_run else ''}.json"
+    model_tag = "dryrun" if args.dry_run else EMBED_CACHE.stem  # keeps results of different models apart
+    out_file = out_dir / f"retrieval_{split_tag}_{args.index}_{model_tag}.json"
     out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"\nSaved {out_file}")
 

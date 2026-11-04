@@ -76,7 +76,7 @@ This document explains **how the system works from start to finish**: which scre
 | `backend/app/services/routing.py` | Chooses `image_assessment` / `text_qa` / `followup` |
 | `backend/app/services/upload_validation.py` | File type, size, decode, quality; strips EXIF |
 | `backend/app/services/photo_guidance.py` | Why to ask for whole-plant / close-up / underside |
-| `backend/app/services/embedder.py` | CLIP ViT-B-32 image + text embeddings |
+| `backend/app/services/embedder.py` | Qwen3-VL-Embedding image + text embeddings (shared space; query/document split) |
 | `backend/app/services/image_retrieval.py` | Image→image nearest neighbours in reference library |
 | `backend/app/services/retrieval.py` | Keyword, semantic text, image→text search |
 | `backend/app/services/evidence.py` | Merge channels; pick ~4–8 diverse evidence items |
@@ -93,7 +93,7 @@ This document explains **how the system works from start to finish**: which scre
 | `backend/data/seed/records.json` | Knowledge records (approved ones enter retrieval) |
 | `backend/data/seed/sources.json` | Source metadata table |
 | `backend/data/splits/main_index.csv` | Reference photo list (test set excluded) |
-| `backend/data/embeddings/ViT-B-32.npz` | Cached CLIP vectors for reference photos |
+| `backend/data/embeddings/qwen3-vl-embedding-2b.npz` | Cached embedding vectors for reference photos |
 | `backend/data/uploads/{case_id}/` | Farmer uploads (re-encoded JPEG, no EXIF) |
 | `backend/data/poc.sqlite3` | Cases, turns, feedback, reviews, gaps |
 | `backend/data/logs/knowledge_gaps.jsonl` | Append-only gap log |
@@ -187,7 +187,7 @@ run_assessment(case, text, image_paths, quality_issues)
 ├─ IMAGE RETRIEVAL (if crop supported & not skip_vision)
 │     for each usable photo:
 │       image_retrieval.match_image(path)
-│         embedder.embed_image_file(path)          # CLIP image vector
+│         embedder.embed_image_file(path)          # image vector
 │         _reference_library()                     # load npz + main_index.csv
 │         _approved_by_label()                     # only approved conditions
 │         cosine similarity → top_k neighbours
@@ -198,8 +198,8 @@ run_assessment(case, text, image_paths, quality_issues)
 │     _query_text(text, meta, summary)
 │     retrieval.search_channels(query, crop_filter, k=CHANNEL_K, image_paths=usable)
 │         search_text          # keyword overlap
-│         search_semantic      # CLIP text↔record text
-│         search_image_to_text # CLIP image↔record text
+│         search_semantic      # text query↔record text
+│         search_image_to_text # image↔record text
 │
 ├─ decide_outcome(...)                # match | healthy | unknown | insufficient | ...
 │
@@ -319,7 +319,7 @@ Every `POST .../messages` returns roughly:
   "policy_removals": 0,
   "diagnostics": { "route": "...", "text_channels": { ... } },
   "latency_ms": { "total": 1234, "image_match": 800, "text_match": 50 },
-  "versions": { "app": "1.0.0", "embedding": "ViT-B-32/...", "index_sha": "...", ... },
+  "versions": { "app": "1.0.0", "embedding": "Qwen/Qwen3-VL-Embedding-2B", "index_sha": "...", ... },
   "case_summary": { "candidates": ["..."], "last_outcome": "...", ... },
   "turn_index": 0
 }
@@ -354,10 +354,10 @@ Configured in `config.py`: `CHANNEL_K=15`, `EVIDENCE_K=8`, `TOP_K=10`.
 |---|---|---|---|
 | Image→image | `image_retrieval.match_image` | Upload path | Top-k reference photos with similarity |
 | Text keyword | `retrieval.search_text` | Query string | Records with overlapping non-stopword tokens |
-| Text semantic | `retrieval.search_semantic` | Query string | Records by CLIP text cosine |
-| Image→text | `retrieval.search_image_to_text` | Upload path(s) | Records by CLIP image↔text cosine |
+| Text semantic | `retrieval.search_semantic` | Query string | Records by text cosine |
+| Image→text | `retrieval.search_image_to_text` | Upload path(s) | Records by image↔text cosine |
 
-`retrieval.search_channels` runs keyword always; semantic and image→text are try/except so CLIP failures do not break the HTTP response.
+`retrieval.search_channels` runs keyword always; semantic and image→text are try/except so embedding failures do not break the HTTP response.
 
 `evidence.select_evidence` then:
 
@@ -495,7 +495,7 @@ validator.validate(draft, evidence)
 ```
 raw photos + metadata.csv
   → scripts/make_splits.py        → main_index.csv + main_test.csv
-  → scripts/evaluate_retrieval.py → builds/uses ViT-B-32.npz; reports top-1 accuracy
+  → scripts/evaluate_retrieval.py → builds/uses the model's embedding cache; reports top-1 accuracy
 expert CSV
   → scripts/records_from_csv.py   → records.json (validated)
 ```
@@ -542,7 +542,9 @@ Farmer          App.jsx           main.py           pipeline.py         retrieva
 | `ANTHROPIC_API_KEY` | env | Required for Anthropic |
 | `PH_VLM_MODEL` | env | Anthropic model id |
 | `PH_VLM_ALLOW_REAL_PHOTOS` | env | Must be `yes` to send farmer uploads to API |
-| `HF_HOME` | env | Hugging Face cache location for CLIP |
+| `HF_HOME` | env | Hugging Face cache location for the embedding model |
+| `PH_EMBED_MODEL` | env | Embedding model id or local path (default `Qwen/Qwen3-VL-Embedding-2B`) |
+| `PH_QWEN_REPO_DIR` | env | Folder of the cloned QwenLM/Qwen3-VL-Embedding repo (provides `Qwen3VLEmbedder`) |
 | `SUPPORTED_CROPS` | config | Pilot crop list (currently `brinjal`) |
 | `CHANNEL_K` / `EVIDENCE_K` / `TOP_K` | config | Retrieval sizes (tuning start points, not diagnostic thresholds) |
 | `MAX_RETRIEVAL_ROUNDS` | config | Extra synthesis retrieval passes (MVP = 1) |
@@ -555,7 +557,7 @@ Farmer          App.jsx           main.py           pipeline.py         retrieva
 - Path traversal blocked on `/images` and `/uploads`.
 - Chemical product names, doses, harvest intervals scrubbed unless present in approved records.
 - VLM failures → template `fallback_draft`; image match failures → limitation strings, request continues.
-- Semantic / image-to-text CLIP errors → empty channel + diagnostic note, not HTTP 500.
+- Semantic / image-to-text embedding errors → empty channel + diagnostic note, not HTTP 500.
 - Cases private by default (local SQLite); consent checkbox for photo storage; reuse as reference needs expert publish decision.
 - No authentication yet — local POC only; do not expose to the internet.
 

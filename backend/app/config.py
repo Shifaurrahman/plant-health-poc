@@ -5,7 +5,9 @@ Environment overrides (optional):
   PH_VLM_ALLOW_REAL_PHOTOS, PH_CORS_ORIGINS, PH_API_PUBLIC_URL,
   PH_SUPPORTED_CROPS, PH_DEFAULT_REGION, PH_HEALTHY_CLASS,
   PH_CHANNEL_K, PH_EVIDENCE_K, PH_TOP_K, PH_MAJORITY_SHARE,
-  PH_MAX_IMAGES, PH_MAX_UPLOAD_MB, PH_CLIP_MODEL, PH_CLIP_PRETRAINED
+  PH_MAX_IMAGES, PH_MAX_UPLOAD_MB,
+  PH_EMBED_MODEL, PH_EMBED_DTYPE, PH_EMBED_MAX_PIXELS, PH_EMBED_BATCH,
+  PH_EMBED_QUERY_INSTRUCTION, PH_QWEN_REPO_DIR, PH_EMBED_CACHE_NAME
 """
 import os
 from pathlib import Path
@@ -39,6 +41,19 @@ def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(x.strip() for x in raw.split(",") if x.strip())
 
 
+# ---- embeddings (Qwen3-VL-Embedding: text and images share one vector space) ----
+EMBED_MODEL = _env("PH_EMBED_MODEL", "Qwen/Qwen3-VL-Embedding-2B")  # Hugging Face id or local folder
+EMBED_DTYPE = _env("PH_EMBED_DTYPE", "bfloat16")                    # bfloat16 | float16 | float32
+EMBED_MAX_PIXELS = _env_int("PH_EMBED_MAX_PIXELS", 0)               # 0 = model default; lower = faster
+EMBED_BATCH = _env_int("PH_EMBED_BATCH", 8)                         # images per batch, offline cache build
+EMBED_QUERY_INSTRUCTION = _env(
+    "PH_EMBED_QUERY_INSTRUCTION",
+    "Retrieve plant disease reference records relevant to the query.",
+)
+# The Qwen3VLEmbedder class lives in github.com/QwenLM/Qwen3-VL-Embedding (not on pip).
+# Clone it and point this at the folder that contains its src/ directory.
+QWEN_REPO_DIR = _env("PH_QWEN_REPO_DIR", "")
+
 # ---- paths ----
 DATA_DIR = Path(_env("PH_DATA_DIR", str(BASE_DIR / "data")))
 
@@ -51,7 +66,9 @@ EVAL_FILE = DATA_DIR / "eval" / "cases.json"
 
 DATASET_ROOT = DATA_DIR / "raw" / _env("PH_DATASET_FOLDER", "sri_lanka_brinjal")
 INDEX_CSV = DATA_DIR / "splits" / _env("PH_INDEX_CSV_NAME", "main_index.csv")
-EMBED_CACHE = DATA_DIR / "embeddings" / _env("PH_EMBED_CACHE_NAME", "ViT-B-32.npz")
+# One cache file per model: vectors from different models must never be mixed.
+EMBED_CACHE = DATA_DIR / "embeddings" / _env(
+    "PH_EMBED_CACHE_NAME", Path(EMBED_MODEL).name.lower() + ".npz")
 
 # ---- pilot scope (change crops/region here) ----
 SUPPORTED_CROPS = tuple(c.lower() for c in _env_csv("PH_SUPPORTED_CROPS", ("brinjal",)))
@@ -89,10 +106,6 @@ VLM_TIMEOUT_S = _env_float("PH_VLM_TIMEOUT_S", 30)
 VLM_MAX_SIDE_PX = _env_int("PH_VLM_MAX_SIDE_PX", 1024)
 VLM_MAX_TOKENS = _env_int("PH_VLM_MAX_TOKENS", 1200)
 VLM_JPEG_QUALITY = _env_int("PH_VLM_JPEG_QUALITY", 85)
-
-# ---- embeddings ----
-CLIP_MODEL = _env("PH_CLIP_MODEL", "ViT-B-32")
-CLIP_PRETRAINED = _env("PH_CLIP_PRETRAINED", "laion2b_s34b_b79k")
 
 # ---- HTTP / CORS ----
 CORS_ORIGINS = list(_env_csv("PH_CORS_ORIGINS", ("http://localhost:5173",)))

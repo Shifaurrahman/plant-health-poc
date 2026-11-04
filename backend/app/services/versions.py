@@ -5,7 +5,7 @@ from pathlib import Path
 from app.config import (
     APP_VERSION, EMBED_CACHE, INDEX_CSV, KNOWLEDGE_VERSION, POLICY_VERSION, SEED_FILE, SOURCES_FILE,
 )
-from app.services.embedder import MODEL, PRETRAINED
+from app.services.embedder import MODEL
 
 _cache: dict[tuple[str, int], str] = {}
 
@@ -26,7 +26,7 @@ def current_versions(vlm_name: str, approved_count: int) -> dict:
         "policy": POLICY_VERSION,
         "model": vlm_name,
         "prompt": "none",
-        "embedding": f"{MODEL}/{PRETRAINED}",
+        "embedding": MODEL,
         "index_sha": _sha(INDEX_CSV),
         "embedding_cache_sha": _sha(EMBED_CACHE),
         "records_sha": _sha(SEED_FILE),

@@ -1,4 +1,4 @@
-"""Match uploaded photos against approved reference photos (CLIP embeddings).
+"""Match uploaded photos against approved reference photos (Qwen3-VL-Embedding vectors).
 
 Reference library = rows of INDEX_CSV (Raw photos, test photos excluded) that have a cached
 embedding. A reference photo is used only if its class has an approved record.
@@ -54,6 +54,10 @@ def match_image(image_path: str, top_k: int = TOP_K) -> list[dict]:
         return []
     idx = np.array(usable)
     q = embed_image_file(image_path)
+    if q.shape[0] != feats.shape[1]:
+        raise RuntimeError(
+            f"embedding cache has {feats.shape[1]}-d vectors but the model gives {q.shape[0]}-d. "
+            "Rebuild the cache with scripts/evaluate_retrieval.py (or fix PH_EMBED_MODEL / PH_EMBED_CACHE_NAME).")
     sims = feats[idx] @ q
     order = np.argsort(-sims)[:top_k]
     out = []

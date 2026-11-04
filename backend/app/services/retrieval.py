@@ -2,15 +2,15 @@
 
 Channels (plan §6):
   keyword        word overlap
-  text_semantic  CLIP text query vs record text
-  image_to_text  CLIP image query vs record text (shared embedding space)
+  text_semantic  Qwen3-VL-Embedding text query vs record text
+  image_to_text  Qwen3-VL-Embedding image query vs record text (shared embedding space)
 """
 import re
 from collections import defaultdict
 
 import numpy as np
 
-from app.services.embedder import embed_image_file, encode_text
+from app.services.embedder import embed_image_file, encode_document, encode_query
 from app.store import store
 
 # Generic words that appear in almost every record or plant_part field.
@@ -37,7 +37,7 @@ def _record_text(rec: dict) -> str:
 
 def _text_vector(text: str):
     if text not in _text_vectors:
-        _text_vectors[text] = encode_text([text])[0]
+        _text_vectors[text] = encode_document([text])[0]
     return _text_vectors[text]
 
 
@@ -77,12 +77,12 @@ def search_text(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
 
 
 def search_semantic(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
-    """Cosine similarity between the question and each record's text, CLIP text encoder."""
+    """Cosine similarity between the question and each record's text (query side of the embedder)."""
     recs = [r for r in store.approved_records()
             if not crop or not r.get("crop") or r["crop"].lower() == crop.lower()]
     if not recs or not query.strip():
         return []
-    q = encode_text([query])[0]
+    q = encode_query([query])[0]
     scored = [(float(q @ _text_vector(_record_text(r))), r) for r in recs]
     scored.sort(key=lambda x: -x[0])
     return [{
@@ -110,7 +110,7 @@ def rrf(rankings: list[list[str]], k: int = RRF_K) -> list[str]:
 
 
 def search_image_to_text(image_paths: list[str], crop: str | None = None, k: int = 8) -> list[dict]:
-    """Match upload image embeddings against approved record text in CLIP space."""
+    """Match upload image embeddings against approved record text in the shared embedding space."""
     recs = [r for r in store.approved_records()
             if not crop or not r.get("crop") or r["crop"].lower() == crop.lower()]
     if not recs or not image_paths:

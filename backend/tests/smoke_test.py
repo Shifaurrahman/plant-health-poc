@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test for the v1.0 plan-aligned features. Uses a fake embedder, so no CLIP download is needed.
+"""Smoke test for the v1.0 plan-aligned features. Uses a fake embedder, so no model download is needed.
 
 Run from backend/:  python tests/smoke_test.py
 Needs:              pip install httpx fastapi pillow numpy
@@ -15,6 +15,7 @@ from pathlib import Path
 TMP = Path(tempfile.mkdtemp())
 DATA = TMP / "data"
 os.environ["PH_DATA_DIR"] = str(DATA)
+os.environ["PH_EMBED_CACHE_NAME"] = "test_embeddings.npz"  # .env must not redirect the test cache
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
@@ -49,7 +50,7 @@ with open(DATA / "splits" / "main_index.csv", "w", newline="", encoding="utf-8")
     writer.writerow(["relative_path", "class", "phase", "derivation", "source_image", "collection_site"])
     for rel, folder in rows:
         writer.writerow([rel, folder, "Raw", "original", Path(rel).name, "TEST"])
-np.savez(DATA / "embeddings" / "ViT-B-32.npz",
+np.savez(DATA / "embeddings" / "test_embeddings.npz",
          paths=np.array(list(vecs)), feats=np.stack(list(vecs.values())))
 
 
@@ -98,7 +99,7 @@ def fake_embed(path):
 
 
 def fake_encode_text(texts):
-    # Deterministic unit vectors so smoke tests never download CLIP.
+    # Deterministic unit vectors so smoke tests never load the real model.
     out = []
     for t in texts:
         key = "ll" if "little" in t.lower() or "narrow" in t.lower() else (
@@ -111,7 +112,8 @@ def fake_encode_text(texts):
 
 ir.embed_image_file = fake_embed
 tr.embed_image_file = fake_embed
-tr.encode_text = fake_encode_text
+tr.encode_query = fake_encode_text
+tr.encode_document = fake_encode_text
 client = TestClient(fastapi_app)
 
 
@@ -157,7 +159,7 @@ check("evidence resolves source title from the sources table",
       any(e.get("source_title") == "Test source (not real)" for e in r["retrieved_evidence"]))
 check("assessment logs latency", {"total", "image_match", "text_match"} <= set(r["latency_ms"]))
 check("assessment logs versions", r["versions"]["index_sha"] and r["versions"]["records_sha"]
-      and r["versions"]["embedding"].startswith("ViT-B-32"))
+      and r["versions"]["embedding"].startswith("Qwen"))
 
 r = send(case, "", [("ll.png", png(), "image/png")]).json()
 check("Little Leaf photo -> outcome match", r["outcome"] == "match")

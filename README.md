@@ -17,8 +17,8 @@ knowledge administration and an evaluation suite. Pilot crop assumption: **brinj
 |---|---|
 | Case workflow (create, multi-photo, follow-up, summary) | Working |
 | Routing (image assessment / text Q&A / follow-up) | Working |
-| Image-to-image retrieval (CLIP) | Working |
-| Text keyword + semantic + image-to-text channels | Working (semantic needs CLIP; fails soft if unavailable) |
+| Image-to-image retrieval (Qwen3-VL-Embedding) | Working |
+| Text keyword + semantic + image-to-text channels | Working (semantic needs the embedding model; fails soft if unavailable) |
 | Evidence merge / diversity selection | Working |
 | Structured answer + three signals (relevance / coverage / confidence) | Working |
 | Unknown outcomes (healthy, unknown, insufficient, unsupported crop, conflict) | Working |
@@ -53,7 +53,7 @@ plant-health-poc/
 │   │   ├── store.py                 cases and turns in SQLite; records loaded at startup
 │   │   ├── routes_images.py         serves dataset photos at /images/...
 │   │   └── services/
-│   │       ├── embedder.py          CLIP image embedder (loaded on first use)
+│   │       ├── embedder.py          Qwen3-VL-Embedding embedder (loaded on first use)
 │   │       ├── image_retrieval.py   photo -> top-k reference photos
 │   │       ├── retrieval.py         keyword matching over approved records
 │   │       ├── pipeline.py          builds the answer
@@ -75,7 +75,7 @@ plant-health-poc/
 │       │   └── records.json             generated; git-ignored
 │       ├── raw/                     dataset photos; git-ignored
 │       ├── splits/                  generated split CSVs; git-ignored
-│       ├── embeddings/              cached CLIP vectors; git-ignored
+│       ├── embeddings/              cached reference-photo vectors; git-ignored
 │       ├── results/                 evaluation outputs; git-ignored
 │       ├── uploads/                 user photos; git-ignored
 │       └── poc.sqlite3              case storage; git-ignored
@@ -96,8 +96,8 @@ plant-health-poc/
 | Python | 3.11 | Tested on 3.11 (Windows) |
 | Node.js + npm | 18 or newer | Needed for the frontend |
 | Git | any | For version control |
-| Disk space | about 5 GB free on the drive holding the project and caches | Dataset is about 2.4 GB zip; CLIP model is about 605 MB |
-| Internet | needed once | To download the CLIP model and datasets |
+| Disk space | about 5 GB free on the drive holding the project and caches | Dataset is about 2.4 GB zip; the Qwen3-VL-Embedding-2B weights need several GB more |
+| Internet | needed once | To download the embedding model and datasets |
 
 **Windows note:** If drive C: is low on space, keep the Hugging Face cache and pip temp files on
 another drive. See [Troubleshooting](#troubleshooting).
@@ -148,10 +148,11 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python -m pip install torch open_clip_torch pillow numpy
+git clone https://github.com/QwenLM/Qwen3-VL-Embedding.git ..\Qwen3-VL-Embedding
 ```
 
-`requirements.txt` covers the web server only. The last line adds the image-matching packages.
+`requirements.txt` includes the embedding packages (torch, transformers, qwen-vl-utils). The `git clone` line fetches the
+`Qwen3VLEmbedder` class, which is not on pip. Add `PH_QWEN_REPO_DIR=<path to that clone>` to `backend/.env`.
 `torch` is large (about 2 GB). If the install fails with "No space left on device", set the temp
 folder to a drive with space first:
 
@@ -169,9 +170,9 @@ set HF_HOME=E:\hf_cache
 uvicorn app.main:app --reload --port 8000
 ```
 
-- `HF_HOME` moves the CLIP model cache off drive C:. Set it in every window where you start uvicorn.
-- The first image upload downloads the CLIP model (about 605 MB) if it is not cached.
-  This can take several minutes.
+- `HF_HOME` moves the Hugging Face model cache off drive C:. Set it in every window where you start uvicorn.
+- The first embedding call downloads Qwen3-VL-Embedding-2B if it is not cached, then loads it into memory.
+  This can take several minutes. A GPU is strongly recommended.
 - API docs: http://127.0.0.1:8000/docs
 - Health check: http://127.0.0.1:8000/health
 
@@ -314,7 +315,7 @@ Base URL: `http://127.0.0.1:8000`
   "next_step": "Compare the photo with the cited reference photos and confirm with a local plant health expert.",
   "retrieved_evidence": [{"id": "Raw_Dataset/Little_Leaf/ll_004.jpg", "type": "image", "similarity": 0.92}],
   "policy_removals": 0,
-  "model_version": "stub+clip-retrieval+keyword-0.3"
+  "model_version": "stub+qwen3vl-retrieval+keyword-0.3"
 }
 ```
 
@@ -450,14 +451,14 @@ Check `git status` first. If dataset or `.venv` files appear, the `.gitignore` i
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `No space left on device` during model download | CLIP cache is on C: | `set HF_HOME=E:\hf_cache` before starting uvicorn, then restart |
+| `No space left on device` during model download | Model cache is on C: | `set HF_HOME=E:\hf_cache` before starting uvicorn, then restart |
 | `No space left on device` during pip install | Temp files on C: | Set `TMP`, `TEMP`, `PIP_CACHE_DIR` to a drive with space (see section 2) |
 | `Could not find module numpy` / `No module named ...` | Packages installed in another environment | Activate `.venv`, then reinstall |
 | `404 case not found` after restart | Cases were in the old in-memory store | Cases now persist in SQLite. Create a new case if the ID is unknown |
 | `422 Expected UploadFile` in Swagger | Swagger's file field sends an empty value | Use curl for photo uploads |
 | `approved_records: 0` | No approved expert records | Run `records_from_csv.py`, then restart uvicorn |
 | Photo gives "no approved match" | Class has no approved record, or index not loaded | Check `/health`, check `records.json`, check `main_index.csv` exists |
-| `embedding cache not found` | Embeddings not generated | Run the evaluator once (it creates `data\embeddings\ViT-B-32.npz`) |
+| `embedding cache not found` | Embeddings not generated | Run the evaluator once (it creates `data\embeddings\qwen3-vl-embedding-2b.npz`) |
 | Images do not show in the UI | Image route not included, or wrong path | Check `main.py` includes the image router. Test `/images/...` in the browser |
 | Frontend cannot reach backend | Backend not running, or wrong host | Start uvicorn on port 8000. Use `localhost:5173` for the frontend |
 | Random `/profile` or `GET /` 404s in the log | Something outside this project calling localhost:8000 | Harmless. Ignore, or find the source |
