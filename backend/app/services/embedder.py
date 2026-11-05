@@ -1,17 +1,17 @@
 """Qwen3-VL-Embedding embedder. Text and images are mapped into ONE shared vector space.
 
 Loaded once, on first use. Setup: clone https://github.com/QwenLM/Qwen3-VL-Embedding and set
-PH_QWEN_REPO_DIR to that folder (the Qwen3VLEmbedder class is in the repo, not on pip).
+PH_QWEN_REPO_DIR to that folder.
 
 Every function returns unit-length float32 numpy vectors, so a dot product is cosine similarity.
-Query vs document: Qwen3-VL-Embedding is instruction-aware. Questions are encoded with an
-instruction (encode_query); record text and reference photos are encoded without one.
 """
+import os
 import sys
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from app.config import (
     EMBED_BATCH, EMBED_DTYPE, EMBED_MAX_PIXELS, EMBED_MODEL, EMBED_QUERY_INSTRUCTION, QWEN_REPO_DIR,
@@ -20,25 +20,67 @@ from app.config import (
 # Re-exported so versions.py and scripts can import a single name.
 MODEL = EMBED_MODEL
 
+# "manual" reads the weights as bytes (works on this Windows CPU build).
+# "hf" uses the repo's normal from_pretrained path, which crashes here.
+LOADER = os.getenv("PH_EMBED_LOADER", "manual").lower()
+
+
+def _manual_from_pretrained(cls, model_name_or_path, *args, **kwargs):
+    """Replacement for Qwen3VLForEmbedding.from_pretrained that avoids memory-mapped safetensors."""
+    import safetensors.torch as st
+    from huggingface_hub import hf_hub_download
+    from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig
+
+    dtype = kwargs.get("dtype") or kwargs.get("torch_dtype") or torch.bfloat16
+    config = Qwen3VLConfig.from_pretrained(model_name_or_path)
+
+    if os.path.isdir(model_name_or_path):
+        weights = os.path.join(model_name_or_path, "model.safetensors")
+    else:
+        weights = hf_hub_download(model_name_or_path, "model.safetensors")
+
+    with open(weights, "rb") as f:
+        raw = f.read()
+    state = st.load(raw)
+    del raw
+
+    previous = torch.get_default_dtype()
+    torch.set_default_dtype(dtype)
+    try:
+        model = cls(config)
+    finally:
+        torch.set_default_dtype(previous)
+
+    result = model.load_state_dict(state, strict=False, assign=True)
+    if result.missing_keys:
+        raise RuntimeError(
+            f"{len(result.missing_keys)} model weights not found in checkpoint, "
+            f"e.g. {result.missing_keys[:3]}"
+        )
+    if result.unexpected_keys:
+        print(f"note: {len(result.unexpected_keys)} checkpoint keys unused, e.g. {result.unexpected_keys[:3]}")
+    return model.eval()
+
 
 @lru_cache(maxsize=1)
 def _load():
-    import torch
-
     if QWEN_REPO_DIR and QWEN_REPO_DIR not in sys.path:
         sys.path.insert(0, QWEN_REPO_DIR)
     try:
-        from src.models.qwen3_vl_embedding import Qwen3VLEmbedder
+        import src.models.qwen3_vl_embedding as qwen_mod
     except ImportError as e:
         raise RuntimeError(
-            "Cannot import Qwen3VLEmbedder. Clone QwenLM/Qwen3-VL-Embedding, install its "
-            "requirements, and set PH_QWEN_REPO_DIR to that folder."
+            "Cannot import Qwen3VLEmbedder. Check PH_QWEN_REPO_DIR in .env points to the "
+            "Qwen3-VL-Embedding folder that contains src/."
         ) from e
 
-    kwargs = {"model_name_or_path": EMBED_MODEL, "dtype": getattr(torch, EMBED_DTYPE), "low_cpu_mem_usage": False}
+    if LOADER == "manual":
+        qwen_mod.Qwen3VLForEmbedding.from_pretrained = classmethod(_manual_from_pretrained)
+
+    kwargs = {"dtype": getattr(torch, EMBED_DTYPE)}
     if EMBED_MAX_PIXELS:
         kwargs["max_pixels"] = EMBED_MAX_PIXELS
-    return Qwen3VLEmbedder(**kwargs)
+    return qwen_mod.Qwen3VLEmbedder(model_name_or_path=EMBED_MODEL, **kwargs)
 
 
 def _unit(x) -> np.ndarray:

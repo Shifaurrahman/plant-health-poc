@@ -47,3 +47,5 @@ Keep evaluation images out of `main_index.csv`.
 | `services/photo_guidance.py` | why whole-plant / close-up / underside help |
 | `services/eval_suite.py` | release-gate checks |
 | `store.py` | SQLite cases, reviews, gaps + seed records |
+
+
