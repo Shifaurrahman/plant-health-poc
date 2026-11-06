@@ -83,6 +83,10 @@ EVIDENCE_K = _env_int("PH_EVIDENCE_K", 8)
 TOP_K = _env_int("PH_TOP_K", 10)
 MAJORITY_SHARE = _env_float("PH_MAJORITY_SHARE", 0.6)
 MAX_RETRIEVAL_ROUNDS = _env_int("PH_MAX_RETRIEVAL_ROUNDS", 1)
+# ---- match thresholds (calibrate on held-out photos; defaults keep the old behaviour) ----
+PHOTO_MIN_SIMILARITY = _env_float("PH_PHOTO_MIN_SIMILARITY", 0.0)  # photo matches below this don't vote
+PHOTO_MIN_VOTES = _env_int("PH_PHOTO_MIN_VOTES", 3)                # fewer surviving matches -> unknown_cause
+SEMANTIC_MIN_SCORE = _env_float("PH_SEMANTIC_MIN_SCORE", 0.0)      # text and image-to-text hits below this are dropped
 
 # ---- answer shape ----
 MAX_CANDIDATE_CAUSES = _env_int("PH_MAX_CANDIDATE_CAUSES", 3)

@@ -1,15 +1,20 @@
 """Text and image-to-text retrieval over approved records.
 
-Channels (plan §6):
-  keyword        word overlap
-  text_semantic  Qwen3-VL-Embedding text query vs record text
-  image_to_text  Qwen3-VL-Embedding image query vs record text (shared embedding space)
+Channels:
+  keyword        word overlap with the farmer's typed words (plus case context)
+  text_semantic  embedding similarity between the typed question and record text
+  image_to_text  embedding similarity between the photo and record text
+
+Gating rules (enforced by search_channels):
+  - semantic runs only when the farmer typed a question
+  - semantic and image_to_text hits below SEMANTIC_MIN_SCORE are dropped
 """
 import re
 from collections import defaultdict
 
 import numpy as np
 
+from app.config import SEMANTIC_MIN_SCORE
 from app.services.embedder import embed_image_file, encode_document, encode_query
 from app.store import store
 
@@ -41,9 +46,33 @@ def _text_vector(text: str):
     return _text_vectors[text]
 
 
+def _record_hit(rec: dict, channel: str, score: float | None = None) -> dict:
+    hit = {
+        "id": rec["record_id"],
+        "type": "text",
+        "title": rec["condition"],
+        "condition": rec["condition"],
+        "record_id": rec["record_id"],
+        "source": rec.get("source_id"),
+        "source_id": rec.get("source_id"),
+        "status": rec["review_status"],
+        "review_status": rec["review_status"],
+        "channel": channel,
+    }
+    if score is not None:
+        hit["score"] = round(score, 3)
+    return hit
+
+
+def _above_min(hits: list[dict]) -> list[dict]:
+    return [h for h in hits if h.get("score", 1.0) >= SEMANTIC_MIN_SCORE]
+
+
 def search_text(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
     """Keyword overlap over approved records. This is what the answer uses."""
     q = _tokens(query)
+    if not q:
+        return []
     scored = []
     for rec in store.approved_records():
         if crop and rec.get("crop") and rec["crop"].lower() != crop.lower():
@@ -58,26 +87,16 @@ def search_text(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
         if overlap:
             scored.append((len(overlap), rec, sorted(overlap)))
     scored.sort(key=lambda x: -x[0])
-    return [
-        {
-            "id": rec["record_id"],
-            "type": "text",
-            "title": rec["condition"],
-            "condition": rec["condition"],
-            "record_id": rec["record_id"],
-            "source": rec.get("source_id"),
-            "source_id": rec.get("source_id"),
-            "status": rec["review_status"],
-            "review_status": rec["review_status"],
-            "channel": "text_keyword",
-            "matched_terms": terms,
-        }
-        for _, rec, terms in scored[:k]
-    ]
+    out = []
+    for _, rec, terms in scored[:k]:
+        hit = _record_hit(rec, "text_keyword")
+        hit["matched_terms"] = terms
+        out.append(hit)
+    return out
 
 
 def search_semantic(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
-    """Cosine similarity between the question and each record's text (query side of the embedder)."""
+    """Cosine similarity between the typed question and each record's text (query side of the embedder)."""
     recs = [r for r in store.approved_records()
             if not crop or not r.get("crop") or r["crop"].lower() == crop.lower()]
     if not recs or not query.strip():
@@ -85,19 +104,7 @@ def search_semantic(query: str, crop: str | None = None, k: int = 8) -> list[dic
     q = encode_query([query])[0]
     scored = [(float(q @ _text_vector(_record_text(r))), r) for r in recs]
     scored.sort(key=lambda x: -x[0])
-    return [{
-        "id": r["record_id"],
-        "type": "text",
-        "title": r["condition"],
-        "condition": r["condition"],
-        "record_id": r["record_id"],
-        "source": r.get("source_id"),
-        "source_id": r.get("source_id"),
-        "status": r["review_status"],
-        "review_status": r["review_status"],
-        "channel": "text_semantic",
-        "score": round(s, 3),
-    } for s, r in scored[:k]]
+    return [_record_hit(r, "text_semantic", s) for s, r in scored[:k]]
 
 
 def rrf(rankings: list[list[str]], k: int = RRF_K) -> list[str]:
@@ -120,19 +127,7 @@ def search_image_to_text(image_paths: list[str], crop: str | None = None, k: int
     q = q / (np.linalg.norm(q) + 1e-9)
     scored = [(float(q @ _text_vector(_record_text(r))), r) for r in recs]
     scored.sort(key=lambda x: -x[0])
-    return [{
-        "id": r["record_id"],
-        "type": "text",
-        "title": r["condition"],
-        "condition": r["condition"],
-        "record_id": r["record_id"],
-        "source": r.get("source_id"),
-        "source_id": r.get("source_id"),
-        "status": r["review_status"],
-        "review_status": r["review_status"],
-        "channel": "image_to_text",
-        "score": round(s, 3),
-    } for s, r in scored[:k]]
+    return [_record_hit(r, "image_to_text", s) for s, r in scored[:k]]
 
 
 def search_channels(
@@ -140,21 +135,31 @@ def search_channels(
     crop: str | None = None,
     k: int = 8,
     image_paths: list[str] | None = None,
+    user_text: str = "",
 ) -> tuple[list[dict], dict]:
-    """Keyword + semantic (+ optional image-to-text). Failures must not break the answer."""
-    keyword = search_text(query, crop=crop, k=k)
+    """Keyword + semantic + image-to-text, with gating.
+
+    query      text used for keyword and semantic matching (may include case context)
+    user_text  what the farmer actually typed; semantic search runs only if this is non-empty
+    Failures must not break the answer: each channel fails soft.
+    """
+    keyword = search_text(query, crop=crop, k=k) if query.strip() else []
     semantic: list[dict] = []
     image_text: list[dict] = []
     errors: list[str] = []
-    try:
-        semantic = search_semantic(query, crop=crop, k=k)
-    except Exception as e:
-        errors.append(f"semantic: {type(e).__name__}: {e}")
+
+    if user_text.strip() and query.strip():
+        try:
+            semantic = _above_min(search_semantic(query, crop=crop, k=k))
+        except Exception as e:
+            errors.append(f"semantic: {type(e).__name__}: {e}")
+
     if image_paths:
         try:
-            image_text = search_image_to_text(image_paths, crop=crop, k=k)
+            image_text = _above_min(search_image_to_text(image_paths, crop=crop, k=k))
         except Exception as e:
             errors.append(f"image_to_text: {type(e).__name__}: {e}")
+
     return keyword, {
         "semantic": semantic,
         "image_to_text": image_text,
@@ -173,6 +178,6 @@ def shadow_compare(query: str, crop: str | None = None) -> dict:
     return {
         "method": "shadow: the answer uses keyword only",
         "keyword": [{"id": i, "title": titles.get(i)} for i in kw_ids],
-        "semantic": [s for s in sem[:5]],
+        "semantic": sem[:5],
         "hybrid": [{"id": i, "title": titles.get(i)} for i in hybrid_ids],
     }
