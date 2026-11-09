@@ -1,0 +1,262 @@
+[
+  {
+    "record_id": "rec_test_little_leaf",
+    "crop": "brinjal",
+    "condition": "Little Leaf",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Leaves become small and narrow; shoots look bunched",
+    "distinguishing_features": "Short internodes and many small leaves on one shoot",
+    "alternatives": [
+      "Healthy",
+      "Mosaic Virus"
+    ],
+    "management_general": "Remove affected plants and keep the field free of weeds",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "in-app-reviewer",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only",
+      "Confirm with a field inspection"
+    ],
+    "next_step": "Send a close-up of the shoot tip",
+    "images": [],
+    "condition_id": "little_leaf",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_healthy",
+    "crop": "brinjal",
+    "condition": "Healthy",
+    "category": "healthy",
+    "synonyms": [],
+    "symptoms": "Leaves are even green with no spots or patches",
+    "distinguishing_features": "Uniform colour and normal leaf shape",
+    "alternatives": [
+      "Little Leaf"
+    ],
+    "management_general": "Keep good spacing and remove weeds regularly",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "in-app-reviewer",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only"
+    ],
+    "next_step": "Send a whole-plant photo for comparison",
+    "images": [],
+    "condition_id": "healthy",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_bacterial_blight",
+    "crop": "brinjal",
+    "condition": "Bacterial Blight",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Water-soaked spots that turn dark and dry",
+    "distinguishing_features": "Spots with a yellow halo on the leaf margin",
+    "alternatives": [
+      "Bacterial Leaf Spot",
+      "Cercospora Leaf Spot"
+    ],
+    "management_general": "Remove infected leaves and avoid overhead watering",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only",
+      "Bacterial causes need lab confirmation"
+    ],
+    "next_step": "Send a close-up of both leaf surfaces",
+    "images": [],
+    "condition_id": "bacterial_blight",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_bacterial_leaf_spot",
+    "crop": "brinjal",
+    "condition": "Bacterial Leaf Spot",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Small dark spots scattered across the leaf",
+    "distinguishing_features": "Spots are angular and bounded by veins",
+    "alternatives": [
+      "Bacterial Blight",
+      "Cercospora Leaf Spot"
+    ],
+    "management_general": "Remove infected leaves and avoid wetting the foliage",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only",
+      "Bacterial causes need lab confirmation"
+    ],
+    "next_step": "Send a close-up of both leaf surfaces",
+    "images": [],
+    "condition_id": "bacterial_leaf_spot",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_bacterial_wilt",
+    "crop": "brinjal",
+    "condition": "Bacterial Wilt",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Plant wilts suddenly while leaves stay green",
+    "distinguishing_features": "Stem cut releases a milky ooze",
+    "alternatives": [
+      "Little Leaf"
+    ],
+    "management_general": "Remove wilted plants and do not replant the same spot",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only",
+      "Confirm with a stem test"
+    ],
+    "next_step": "Send a photo of the stem base",
+    "images": [],
+    "condition_id": "bacterial_wilt",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_cercospora",
+    "crop": "brinjal",
+    "condition": "Cercospora Leaf Spot",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Round spots with grey centres and dark edges",
+    "distinguishing_features": "Spots have concentric rings on older leaves",
+    "alternatives": [
+      "Bacterial Leaf Spot",
+      "Bacterial Blight"
+    ],
+    "management_general": "Remove fallen leaves and keep the canopy open",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": false,
+    "evaluation_note": null,
+    "limitations": [
+      "Test record only",
+      "Several leaf diseases look similar"
+    ],
+    "next_step": "Send a close-up of a single spot",
+    "images": [],
+    "condition_id": "cercospora_leaf_spot",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_mosaic",
+    "crop": "brinjal",
+    "condition": "Mosaic Virus",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "Yellow and green mottling on leaves",
+    "distinguishing_features": "Mottled pattern spreads across the whole leaf",
+    "alternatives": [
+      "Little Leaf",
+      "Healthy"
+    ],
+    "management_general": "Remove infected plants and control insect vectors",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": true,
+    "evaluation_note": "Test note: weak in farm-level evaluation",
+    "limitations": [
+      "Test record only",
+      "Virus cannot be confirmed by photo alone"
+    ],
+    "next_step": "Send a photo of the youngest leaves",
+    "images": [],
+    "condition_id": "mosaic_virus",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  },
+  {
+    "record_id": "rec_test_powdery_mildew",
+    "crop": "brinjal",
+    "condition": "Powdery Mildew",
+    "category": "disease",
+    "synonyms": [],
+    "symptoms": "White powdery coating on upper leaf surface",
+    "distinguishing_features": "Coating rubs off easily and spreads over time",
+    "alternatives": [
+      "Cercospora Leaf Spot"
+    ],
+    "management_general": "Improve airflow and avoid crowding plants",
+    "source_id": "DEV_TEST_NOT_FOR_USE",
+    "review_status": "approved",
+    "reviewed_by": "dev-test",
+    "reviewed_on": "2026-10-27",
+    "weak_in_evaluation": true,
+    "evaluation_note": "Test note: weak in farm-level evaluation",
+    "limitations": [
+      "Test record only",
+      "Powdery mildew can look like dust"
+    ],
+    "next_step": "Send a close-up of the upper leaf surface",
+    "images": [],
+    "condition_id": "powdery_mildew",
+    "publication_status": "approved",
+    "affected_organs": [],
+    "progression": null,
+    "context": null,
+    "version": "1",
+    "label_basis": "expert_confirmed"
+  }
+]

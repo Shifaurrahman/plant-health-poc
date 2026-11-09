@@ -3,24 +3,25 @@
 
 Index  : reference images. Default "originals" = Raw-phase photos, excluding test photos.
          "all" = every non-test image, including augmented copies (robustness check).
-Query  : held-out Raw originals from main_test.csv.
+Query  : held-out Raw originals from the test split.
 Predict: majority vote over the top-k most similar index images (cosine similarity).
 
+Cache layout (the backend reads only the first file):
+  EMBED_CACHE              index photos only (what the backend searches)
+  test_only.npz (sibling)  held-out test photos (evaluation only, never searched by the app)
+
 Usage (run from backend/):
-    # farm holdout (stricter): one run per farm
-    python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits \
-        --test-file data/splits/farm_HORDI_Kandy_test.csv --index-file data/splits/farm_HORDI_Kandy_index.csv
     python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits
     python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits --index all
     python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits --dry-run
+    # farm holdout (stricter): one run per farm
+    python scripts/evaluate_retrieval.py --dataset data/raw/sri_lanka_brinjal --splits data/splits \
+        --test-file data/splits/farm_HORDI_Kandy_test.csv --index-file data/splits/farm_HORDI_Kandy_index.csv
 
 Model: Qwen3-VL-Embedding (PH_EMBED_MODEL in .env / app/config.py). It must be the SAME model the
 backend uses, so this script calls app.services.embedder instead of loading a model of its own.
-First real run downloads the weights and needs the Qwen3-VL-Embedding repo on PH_QWEN_REPO_DIR.
-Use a GPU if you can; the cache build embeds every reference photo once.
 
 --dry-run uses random vectors. It checks the pipeline only and its scores mean nothing.
-Embeddings are cached in data/embeddings/ so reruns are fast.
 """
 import argparse
 import csv
@@ -37,6 +38,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # so "app" is i
 from app.config import EMBED_BATCH, EMBED_CACHE  # noqa: E402
 from app.services.embedder import MODEL, embed_image_files  # noqa: E402
 
+TEST_CACHE_NAME = "test_only.npz"
+
 
 def read_csv(path: Path) -> list[dict]:
     with path.open(encoding="utf-8", newline="") as f:
@@ -44,7 +47,7 @@ def read_csv(path: Path) -> list[dict]:
 
 
 def embed_model(paths: list[str], dataset_root: Path, batch: int = EMBED_BATCH) -> np.ndarray:
-    """Embed reference/test photos with the same embedder the backend uses at request time."""
+    """Embed photos with the same embedder the backend uses at request time."""
     feats = []
     for i in range(0, len(paths), batch):
         chunk = [dataset_root / p for p in paths[i:i + batch]]
@@ -66,18 +69,19 @@ def embed_dry(paths: list[str]) -> np.ndarray:
 
 def get_embeddings(paths: list[str], dataset_root: Path, cache_file: Path, dry: bool,
                    batch: int = EMBED_BATCH) -> dict[str, np.ndarray]:
+    """Load cached vectors for `paths`, embed the missing ones, and save the cache file."""
     cache: dict[str, np.ndarray] = {}
     if cache_file.exists():
         data = np.load(cache_file, allow_pickle=True)
         cache = dict(zip(data["paths"].tolist(), data["feats"]))
     missing = [p for p in paths if p not in cache]
     if missing:
-        print(f"Embedding {len(missing)} new images ({'dry run' if dry else MODEL})")
+        print(f"Embedding {len(missing)} new images into {cache_file.name} ({'dry run' if dry else MODEL})")
         new = embed_dry(missing) if dry else embed_model(missing, dataset_root, batch)
         cache.update(zip(missing, new))
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         np.savez(cache_file, paths=np.array(list(cache.keys())), feats=np.stack(list(cache.values())))
-    return cache
+    return {p: cache[p] for p in paths}
 
 
 def predict(query: np.ndarray, index: np.ndarray, labels: list[str], k: int) -> list[str]:
@@ -103,7 +107,7 @@ def wilson(correct: int, n: int, z: float = 1.96) -> tuple[float, float]:
     return (centre - half, centre + half)
 
 
-def main() -> None:
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True, help="dataset root, e.g. data/raw/sri_lanka_brinjal")
     ap.add_argument("--splits", required=True, help="folder containing main_test.csv and main_index.csv")
@@ -125,17 +129,33 @@ def main() -> None:
     if args.index == "originals":
         index_rows = [r for r in index_rows if r["phase"] == "Raw"]
 
+    index_paths = sorted({r["relative_path"] for r in index_rows})
+    test_paths = sorted({r["relative_path"] for r in test})
+
+    # Leak guard: a held-out photo must never be in the index used for matching.
+    leaked = sorted(set(index_paths) & set(test_paths))
+    if leaked:
+        print(f"ERROR: {len(leaked)} test photos are also in the index, e.g. {leaked[0]}")
+        print("Fix the split files before evaluating. Results would be inflated.")
+        return 1
+
     classes = sorted({r["class"] for r in test})
-    print(f"Index: {len(index_rows)} images ({args.index}). Test queries: {len(test)}. Classes: {len(classes)}")
+    print(f"Index: {len(index_rows)} rows ({args.index}). Test queries: {len(test)}. Classes: {len(classes)}")
 
-    # Same file the backend reads (EMBED_CACHE), so evaluating and serving always use one cache.
-    cache_file = Path("data/embeddings/dryrun.npz") if args.dry_run else EMBED_CACHE
-    all_paths = sorted({r["relative_path"] for r in index_rows} | {r["relative_path"] for r in test})
-    emb = get_embeddings(all_paths, dataset_root, cache_file, args.dry_run, args.batch)
+    # Index vectors go to the backend's cache. Test vectors go to a separate file.
+    if args.dry_run:
+        index_cache = Path("data/embeddings/dryrun.npz")
+        test_cache = Path("data/embeddings/dryrun_test.npz")
+    else:
+        index_cache = EMBED_CACHE
+        test_cache = EMBED_CACHE.with_name(TEST_CACHE_NAME)
 
-    idx_feats = np.stack([emb[r["relative_path"]] for r in index_rows])
+    emb_index = get_embeddings(index_paths, dataset_root, index_cache, args.dry_run, args.batch)
+    emb_test = get_embeddings(test_paths, dataset_root, test_cache, args.dry_run, args.batch)
+
+    idx_feats = np.stack([emb_index[r["relative_path"]] for r in index_rows])
     idx_labels = [r["class"] for r in index_rows]
-    q_feats = np.stack([emb[r["relative_path"]] for r in test])
+    q_feats = np.stack([emb_test[r["relative_path"]] for r in test])
     truth = [r["class"] for r in test]
 
     results = {"index": args.index, "index_size": len(index_rows), "test_size": len(test),
@@ -163,10 +183,11 @@ def main() -> None:
 
     out_dir = Path("data/results")
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_tag = "dryrun" if args.dry_run else EMBED_CACHE.stem  # keeps results of different models apart
+    model_tag = "dryrun" if args.dry_run else index_cache.stem  # keeps results of different models apart
     out_file = out_dir / f"retrieval_{split_tag}_{args.index}_{model_tag}.json"
     out_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(f"\nSaved {out_file}")
+    return 0
 
 
 if __name__ == "__main__":

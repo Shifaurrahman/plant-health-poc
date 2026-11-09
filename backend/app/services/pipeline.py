@@ -6,7 +6,7 @@ from app.config import (
     MAX_CANDIDATE_CAUSES, MAX_QUESTIONS, MAX_RETRIEVAL_ROUNDS, PHOTO_MIN_SIMILARITY,
     PHOTO_MIN_VOTES, SUPPORTED_CROPS, crops_label,
 )
-from app.services import image_retrieval, retrieval, validator
+from app.services import expert, image_retrieval, retrieval, validator
 from app.services.evidence import select_evidence
 from app.services.photo_guidance import quality_questions
 from app.services.routing import prior_images, route
@@ -62,13 +62,13 @@ OUTCOMES = {
 
 def decide_outcome(crop_ok: bool, image_paths: list[str], quality_issues: list[list[str]],
                    matches: list[dict], text_evidence: list[dict], raw_match_count: int = 0) -> str:
-    """matches: photo matches that cleared PHOTO_MIN_SIMILARITY. raw_match_count: before that filter."""
+    """Photo-quality gate. Only the unsupported_crop and insufficient_image results are used from it."""
     if not crop_ok:
         return "unsupported_crop"
     if image_paths and all(quality_issues):
         return "insufficient_image"
     if not matches:
-        if raw_match_count:  # photos were compared, but nothing was close enough
+        if raw_match_count:
             return "unknown_cause"
         return "text_only_match" if text_evidence else "no_match"
     if len(matches) < PHOTO_MIN_VOTES:
@@ -80,6 +80,20 @@ def decide_outcome(crop_ok: bool, image_paths: list[str], quality_issues: list[l
     if label == HEALTHY_CLASS:
         return "healthy_appearance"
     return "match"
+
+
+def verdict_to_outcome(verdict: dict, healthy_photo: bool) -> str:
+    """Map the expert verdict to the outcome label the UI and the response use."""
+    if healthy_photo:
+        return "healthy_appearance"
+    v = verdict["verdict"]
+    if v == "likely":
+        return "match"
+    if v == "possible":
+        return "unknown_cause"
+    if any("different causes" in r for r in verdict["reasons"]):
+        return "conflict"
+    return "unknown_cause"
 
 
 def apply_fit_check(draft: dict, outcome: str) -> tuple[str, dict]:
@@ -214,7 +228,7 @@ def _query_text(text: str, meta: dict, summary: dict) -> str:
 
 
 def _second_round_items(query: str, crop: str | None, draft: dict, known: set[str], user_text: str) -> list[dict]:
-    """At most one extra keyword retrieval, if synthesis named conditions we have not retrieved yet."""
+    """At most one extra text retrieval, if synthesis named conditions we have not retrieved yet."""
     if MAX_RETRIEVAL_ROUNDS < 1 or not query.strip():
         return []
     names = " ".join(
@@ -225,10 +239,11 @@ def _second_round_items(query: str, crop: str | None, draft: dict, known: set[st
     extra_terms = [w for w in names.split() if len(w) > 4]
     if not extra_terms:
         return []
-    more, _ = retrieval.search_channels(
+    _, more = retrieval.search_channels(
         query + " " + " ".join(extra_terms[:8]), crop=crop, k=CHANNEL_K, user_text=user_text,
     )
-    return [e for e in more if (e.get("condition") or e.get("title") or "").lower() not in known]
+    return [e for e in more.get("semantic") or []
+            if (e.get("condition") or e.get("title") or "").lower() not in known]
 
 
 def _case_summary(meta: dict, assessment: dict) -> dict:
@@ -299,16 +314,22 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
         query, crop=crop_filter, k=CHANNEL_K,
         image_paths=usable or None, user_text=user_text,
     )
-    text_ms = round((time.perf_counter() - t_txt) * 1000)
-
     semantic_pool = channel_diag.get("semantic") or []
     image_text_pool = channel_diag.get("image_to_text") or []
+    text_ms = round((time.perf_counter() - t_txt) * 1000)
+
+    # ---- expert verdict: photo votes and selected text records decide the outcome ----
+    photo_votes = Counter(m["record"]["condition"] for m in matches)
+    text_conditions = [e["condition"] for e in semantic_pool]
+    verdict = expert.decide(photo_votes, len(matches), text_conditions, has_user_text)
+    healthy_photo = verdict["candidates"] == [HEALTHY_CLASS]
 
     diagnostics = {
         "route": request_route,
         "photo_matches_raw": len(raw_matches),
         "photo_matches_passing": len(matches),
         "photo_min_similarity": PHOTO_MIN_SIMILARITY,
+        "expert_verdict": verdict["verdict"],
         "text_channels": {
             "typed_text": has_user_text,
             "keyword_ids": [e["id"] for e in keyword_ev],
@@ -320,19 +341,21 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
         },
     }
 
-    # ---- outcome ----
-    outcome = decide_outcome(
+    # ---- outcome: quality checks first, then the expert verdict ----
+    gate = decide_outcome(
         crop_ok,
         analysis_images if not skip_vision else [],
         analysis_quality if not skip_vision else [],
         matches,
-        keyword_ev,
+        semantic_pool,
         len(raw_matches),
     )
-    if skip_vision and keyword_ev:
-        outcome = "text_only_match"
-    if skip_vision and not keyword_ev:
-        outcome = "no_match"
+    if gate in ("unsupported_crop", "insufficient_image"):
+        outcome = gate
+    elif skip_vision:
+        outcome = "text_only_match" if semantic_pool else "no_match"
+    else:
+        outcome = verdict_to_outcome(verdict, healthy_photo)
 
     # ---- candidates and first-pass evidence ----
     if outcome in ("unsupported_crop", "insufficient_image"):
@@ -341,6 +364,9 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     else:
         image_candidates = image_retrieval.candidates_from_matches(matches)
         image_ev = image_retrieval.evidence_from_matches(matches)
+    # Only the candidates the expert verdict keeps may appear as image candidates.
+    if verdict["candidates"]:
+        image_candidates = [c for c in image_candidates if c["name"] in verdict["candidates"]]
     image_names = {c["name"] for c in image_candidates}
 
     pools = [image_ev, keyword_ev, semantic_pool, image_text_pool]
@@ -351,7 +377,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     draft = None if skip_vision else vlm.synthesize(meta, text, observations, evidence, outcome, summary)
 
     if draft is None:
-        draft = fallback_draft(image_candidates, keyword_ev, bool(analysis_images), meta, outcome, extra_q)
+        draft = fallback_draft(image_candidates, semantic_pool, bool(analysis_images), meta, outcome, extra_q)
     else:
         outcome, draft = apply_fit_check(draft, outcome)
         if outcome == "conflict":
@@ -385,8 +411,9 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
         limitations.append(
             f"Crop was not provided; {CROP} is assumed for this pilot and treated as uncertain."
         )
-    if OUTCOMES[outcome]["limitation"]:
+    if OUTCOMES.get(outcome, {}).get("limitation"):
         limitations.append(OUTCOMES[outcome]["limitation"])
+    limitations += verdict["reasons"]
     if outcome == "unsupported_crop":
         draft["next_step"] = _outcome_next_step("unsupported_crop")
     for lim in record_limitations(matches):
@@ -395,6 +422,9 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     for name in draft.get("rejected_candidates", []):
         limitations.append(f"The visible symptoms did not fit '{name}' when checked against the photo.")
     draft["limitations"] = limitations
+
+    if verdict["checks_needed"]:
+        draft["questions"] = [f"Check: {c}" for c in verdict["checks_needed"]][:MAX_QUESTIONS]
 
     if outcome == "match" and matches and matches[0]["record"].get("next_step"):
         draft["next_step"] = matches[0]["record"]["next_step"]
@@ -419,6 +449,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     return {
         "route": request_route,
         "outcome": outcome,
+        "expert": verdict,
         "observations": observations,
         "candidate_causes": draft["candidate_causes"],
         "alternatives": draft["alternatives"],

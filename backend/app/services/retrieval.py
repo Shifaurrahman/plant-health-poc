@@ -1,38 +1,31 @@
-"""Text and image-to-text retrieval over approved records.
+"""Text evidence for the farmer's typed words, and image-to-text matching.
 
-Channels:
-  keyword        word overlap with the farmer's typed words (plus case context)
-  text_semantic  embedding similarity between the typed question and record text
-  image_to_text  embedding similarity between the photo and record text
+Text evidence path (search_channels):
+  1. Embedding shortlist: the typed words are compared with each approved record's text.
+  2. Relevance: a language model picks which shortlisted records match the described symptoms
+     (services/relevance.py). If it is off or fails, the embedding score threshold is used.
 
-Gating rules (enforced by search_channels):
-  - semantic runs only when the farmer typed a question
-  - semantic and image_to_text hits below SEMANTIC_MIN_SCORE are dropped
+No word lists or keyword overlap decide evidence. The keyword search is kept for reference only,
+and search_channels does not return its results.
+
+Channels returned:
+  text_semantic  a shortlisted record selected by relevance (or by score when relevance is off)
+  image_to_text  photo compared with record text; off unless PH_IMAGE_TO_TEXT=yes
 """
-import re
+import os
 from collections import defaultdict
 
 import numpy as np
 
-from app.config import SEMANTIC_MIN_SCORE
+from app.config import RELEVANCE_SHORTLIST_K, SEMANTIC_MIN_SCORE
+from app.services import relevance
 from app.services.embedder import embed_image_file, encode_document, encode_query
 from app.store import store
 
-# Generic words that appear in almost every record or plant_part field.
-# Without these, every record matches on "leaf" alone.
-STOPWORDS = {
-    "the", "a", "an", "and", "or", "of", "on", "in", "is", "are", "with", "my", "this",
-    "that", "it", "to", "for", "some", "have", "has", "lower", "upper", "leaves", "leaf",
-    "spot", "spots", "plant", "brown", "about", "weeks", "week", "days", "day",
-}
-TOKEN = re.compile(r"[a-z]+")
-RRF_K = 60
+# Image-to-text stays off until its scores are calibrated on held-out photos.
+IMAGE_TO_TEXT_ENABLED = os.getenv("PH_IMAGE_TO_TEXT", "no").lower() == "yes"
 
 _text_vectors: dict[str, object] = {}  # record text -> embedding (computed once per text)
-
-
-def _tokens(s: str) -> set[str]:
-    return {t for t in TOKEN.findall(s.lower()) if t not in STOPWORDS}
 
 
 def _record_text(rec: dict) -> str:
@@ -64,26 +57,22 @@ def _record_hit(rec: dict, channel: str, score: float | None = None) -> dict:
     return hit
 
 
-def _above_min(hits: list[dict]) -> list[dict]:
-    return [h for h in hits if h.get("score", 1.0) >= SEMANTIC_MIN_SCORE]
+def _crop_match(rec: dict, crop: str | None) -> bool:
+    return not crop or not rec.get("crop") or rec["crop"].lower() == crop.lower()
 
 
 def search_text(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
-    """Keyword overlap over approved records. This is what the answer uses."""
-    q = _tokens(query)
+    """Keyword overlap. Kept for reference and debugging. Not used as evidence."""
+    import re
+    tok = lambda s: set(re.findall(r"[a-z]+", s.lower()))  # noqa: E731
+    q = tok(query)
     if not q:
         return []
     scored = []
     for rec in store.approved_records():
-        if crop and rec.get("crop") and rec["crop"].lower() != crop.lower():
+        if not _crop_match(rec, crop):
             continue
-        doc = " ".join([
-            rec.get("condition", ""),
-            rec.get("symptoms", ""),
-            rec.get("distinguishing_features", ""),
-            " ".join(rec.get("synonyms", [])),
-        ])
-        overlap = q & _tokens(doc)
+        overlap = q & tok(_record_text(rec) + " " + " ".join(rec.get("synonyms", [])))
         if overlap:
             scored.append((len(overlap), rec, sorted(overlap)))
     scored.sort(key=lambda x: -x[0])
@@ -96,9 +85,8 @@ def search_text(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
 
 
 def search_semantic(query: str, crop: str | None = None, k: int = 8) -> list[dict]:
-    """Cosine similarity between the typed question and each record's text (query side of the embedder)."""
-    recs = [r for r in store.approved_records()
-            if not crop or not r.get("crop") or r["crop"].lower() == crop.lower()]
+    """Embedding similarity between the typed words and each record's text."""
+    recs = [r for r in store.approved_records() if _crop_match(r, crop)]
     if not recs or not query.strip():
         return []
     q = encode_query([query])[0]
@@ -107,7 +95,31 @@ def search_semantic(query: str, crop: str | None = None, k: int = 8) -> list[dic
     return [_record_hit(r, "text_semantic", s) for s, r in scored[:k]]
 
 
-def rrf(rankings: list[list[str]], k: int = RRF_K) -> list[str]:
+def select_text_evidence(user_text: str, crop: str | None, k: int) -> tuple[list[dict], str | None]:
+    """Shortlist by embedding, then let the relevance step pick which ones match."""
+    if not user_text.strip():
+        return [], None
+    shortlist = [h for h in search_semantic(user_text, crop=crop, k=k)
+                 if h["score"] >= SEMANTIC_MIN_SCORE]
+    if not shortlist:
+        return [], None
+
+    by_id = {r["record_id"]: r for r in store.approved_records()}
+    items = [{
+        "id": h["id"],
+        "condition": h["condition"],
+        "symptoms": (by_id.get(h["id"]) or {}).get("symptoms", ""),
+        "distinguishing_features": (by_id.get(h["id"]) or {}).get("distinguishing_features", ""),
+    } for h in shortlist]
+
+    ids, err = relevance.select_relevant(user_text, items)
+    if ids is None:  # relevance off or failed: fall back to the embedding shortlist
+        return shortlist, err
+    chosen = [dict(h, matched_by="model") for h in shortlist if h["id"] in set(ids)]
+    return chosen, None
+
+
+def rrf(rankings: list[list[str]], k: int = 60) -> list[str]:
     """Reciprocal Rank Fusion: an item scores 1/(k+rank) in each list it appears in."""
     score: dict[str, float] = defaultdict(float)
     for ranking in rankings:
@@ -117,9 +129,8 @@ def rrf(rankings: list[list[str]], k: int = RRF_K) -> list[str]:
 
 
 def search_image_to_text(image_paths: list[str], crop: str | None = None, k: int = 8) -> list[dict]:
-    """Match upload image embeddings against approved record text in the shared embedding space."""
-    recs = [r for r in store.approved_records()
-            if not crop or not r.get("crop") or r["crop"].lower() == crop.lower()]
+    """Photo compared with record text in the shared embedding space. Off by default."""
+    recs = [r for r in store.approved_records() if _crop_match(r, crop)]
     if not recs or not image_paths:
         return []
     vectors = [embed_image_file(p) for p in image_paths]
@@ -137,47 +148,31 @@ def search_channels(
     image_paths: list[str] | None = None,
     user_text: str = "",
 ) -> tuple[list[dict], dict]:
-    """Keyword + semantic + image-to-text, with gating.
+    """Same return shape as before, so pipeline.py does not change.
 
-    query      text used for keyword and semantic matching (may include case context)
-    user_text  what the farmer actually typed; semantic search runs only if this is non-empty
-    Failures must not break the answer: each channel fails soft.
+    Returns (keyword_list, diag). keyword_list is always empty now: text evidence is in
+    diag["semantic"], selected by the model or by score. The pipeline already reads that list.
     """
-    keyword = search_text(query, crop=crop, k=k) if query.strip() else []
-    semantic: list[dict] = []
-    image_text: list[dict] = []
     errors: list[str] = []
 
-    if user_text.strip() and query.strip():
-        try:
-            semantic = _above_min(search_semantic(query, crop=crop, k=k))
-        except Exception as e:
-            errors.append(f"semantic: {type(e).__name__}: {e}")
+    semantic: list[dict] = []
+    try:
+        semantic, err = select_text_evidence(user_text, crop, RELEVANCE_SHORTLIST_K)
+        if err:
+            errors.append(err)
+    except Exception as e:  # fail soft: the photo answer must still be returned
+        errors.append(f"semantic: {type(e).__name__}: {e}")
 
-    if image_paths:
+    image_text: list[dict] = []
+    if image_paths and IMAGE_TO_TEXT_ENABLED:
         try:
-            image_text = _above_min(search_image_to_text(image_paths, crop=crop, k=k))
+            image_text = [h for h in search_image_to_text(image_paths, crop=crop, k=k)
+                          if h["score"] >= SEMANTIC_MIN_SCORE]
         except Exception as e:
             errors.append(f"image_to_text: {type(e).__name__}: {e}")
 
-    return keyword, {
+    return [], {
         "semantic": semantic,
         "image_to_text": image_text,
         "error": "; ".join(errors) if errors else None,
-    }
-
-
-def shadow_compare(query: str, crop: str | None = None) -> dict:
-    """Compute keyword, semantic and hybrid rankings. Only logged; the answer does not use them."""
-    kw = search_text(query, crop=crop, k=8)
-    kw_ids = [e["id"] for e in kw]
-    sem = search_semantic(query, crop=crop, k=8)
-    sem_ids = [s["id"] for s in sem]
-    hybrid_ids = rrf([kw_ids, sem_ids])[:5]
-    titles = {r["record_id"]: r["condition"] for r in store.approved_records()}
-    return {
-        "method": "shadow: the answer uses keyword only",
-        "keyword": [{"id": i, "title": titles.get(i)} for i in kw_ids],
-        "semantic": sem[:5],
-        "hybrid": [{"id": i, "title": titles.get(i)} for i in hybrid_ids],
     }

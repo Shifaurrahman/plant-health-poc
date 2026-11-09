@@ -88,6 +88,12 @@ PHOTO_MIN_SIMILARITY = _env_float("PH_PHOTO_MIN_SIMILARITY", 0.0)  # photo match
 PHOTO_MIN_VOTES = _env_int("PH_PHOTO_MIN_VOTES", 3)                # fewer surviving matches -> unknown_cause
 SEMANTIC_MIN_SCORE = _env_float("PH_SEMANTIC_MIN_SCORE", 0.0)      # text and image-to-text hits below this are dropped
 
+# ---- text relevance (model decides which shortlisted records match the farmer's words) ----
+RELEVANCE_PROVIDER = _env("PH_RELEVANCE_PROVIDER", "none").lower()   # none | anthropic
+RELEVANCE_MODEL = _env("PH_RELEVANCE_MODEL", "claude-haiku-5-5")
+RELEVANCE_SHORTLIST_K = _env_int("PH_RELEVANCE_SHORTLIST_K", 8)
+RELEVANCE_TIMEOUT_S = _env_float("PH_RELEVANCE_TIMEOUT_S", 20)
+
 # ---- answer shape ----
 MAX_CANDIDATE_CAUSES = _env_int("PH_MAX_CANDIDATE_CAUSES", 3)
 MAX_ALTERNATIVES = _env_int("PH_MAX_ALTERNATIVES", 3)
