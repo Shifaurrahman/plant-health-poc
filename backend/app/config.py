@@ -8,6 +8,8 @@ Environment overrides (optional):
   PH_MAX_IMAGES, PH_MAX_UPLOAD_MB,
   PH_EMBED_MODEL, PH_EMBED_DTYPE, PH_EMBED_MAX_PIXELS, PH_EMBED_BATCH,
   PH_EMBED_QUERY_INSTRUCTION, PH_QWEN_REPO_DIR, PH_EMBED_CACHE_NAME
+  PH_EMBED_BACKEND, PH_GEMMA2_MODEL, PH_GEMMA2_DTYPE, PH_GEMMA2_MAX_PIXELS, PH_GEMMA2_BATCH,
+  PH_GEMMA2_QUERY_INSTRUCTION, PH_GEMMA2_QWEN_REPO_DIR, PH_GEMMA2_EMBED_CACHE_NAME
 """
 import os
 from pathlib import Path
@@ -50,6 +52,12 @@ EMBED_QUERY_INSTRUCTION = _env(
     "PH_EMBED_QUERY_INSTRUCTION",
     "Retrieve plant disease reference records relevant to the query.",
 )
+
+# ---- embedding backend: "qwen" (current) or "gemma2" (comparison) ----
+EMBED_BACKEND = _env("PH_EMBED_BACKEND", "qwen").lower()
+GEMMA2_MODEL = _env("PH_GEMMA2_MODEL", "google/embeddinggemma-2")
+GEMMA2_DTYPE = _env("PH_GEMMA2_DTYPE", "bfloat16")  # never float16
+
 # The Qwen3VLEmbedder class lives in github.com/QwenLM/Qwen3-VL-Embedding (not on pip).
 # Clone it and point this at the folder that contains its src/ directory.
 QWEN_REPO_DIR = _env("PH_QWEN_REPO_DIR", "")
@@ -68,8 +76,9 @@ DATASET_ROOT = DATA_DIR / "raw" / _env("PH_DATASET_FOLDER", "sri_lanka_brinjal")
 INDEX_CSV = DATA_DIR / "splits" / _env("PH_INDEX_CSV_NAME", "main_index.csv")
 # One cache file per model: vectors from different models must never be mixed.
 EMBED_CACHE = DATA_DIR / "embeddings" / _env(
-    "PH_EMBED_CACHE_NAME", Path(EMBED_MODEL).name.lower() + ".npz")
-
+    "PH_EMBED_CACHE_NAME", 
+    "embeddinggemma2.npz" if EMBED_BACKEND == "gemma2" else Path(EMBED_MODEL).name.lower() + ".npz",
+)
 # ---- pilot scope (change crops/region here) ----
 SUPPORTED_CROPS = tuple(c.lower() for c in _env_csv("PH_SUPPORTED_CROPS", ("brinjal",)))
 CROP = SUPPORTED_CROPS[0] if SUPPORTED_CROPS else "brinjal"
