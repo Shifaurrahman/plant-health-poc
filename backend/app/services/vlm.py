@@ -229,7 +229,7 @@ class AnthropicVLM:
             } for e in evidence],
         }
         try:
-            raw = self._call(_load_prompt("synthesize_v4.txt"),
+            raw = self._call(_load_prompt("synthesize-v5.txt"),
                              [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}])
             data = _parse_json(raw)
             if not data:

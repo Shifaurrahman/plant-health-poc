@@ -1,8 +1,13 @@
-"""Match uploaded photos against approved reference photos (Qwen3-VL-Embedding vectors).
+"""Semantic search over the fused embedding cache.
 
-Reference library = rows of INDEX_CSV (Raw photos, test photos excluded) that have a cached
-embedding. A reference photo is used only if its class has an approved record.
-A photo listed in a record's "images" field is linked to that record directly.
+Every query is embedded with embed_multimodal and compared with the cached vectors
+by dot product (cosine, since vectors are unit length):
+  photo only       -> {"image": p}
+  photo + text     -> {"image": p, "text": t}
+  text only        -> {"text": t}
+
+The cache is EMBED_CACHE (e.g. manual_multimodal_embeddinggemma-2.npz).
+No keyword matching is used.
 """
 import csv
 from collections import defaultdict
@@ -10,41 +15,81 @@ from functools import lru_cache
 
 import numpy as np
 
-from app.config import CROP, EMBED_CACHE, INDEX_CSV, TOP_K
-from app.services.embedder import embed_image_file
+from app.config import (
+    CROP, DATA_DIR, EMBED_CACHE, INDEX_CSV, TEXT_CLASS_MARGIN,
+    TEXT_ONLY_MIN_SIMILARITY, TOP_K,
+)
+from app.services.embedder import embed_multimodal
 from app.store import store
+
+TEXT_PHOTOS_PER_CLASS = 2  # text-only results: at most this many photos per class
+
+
+def _local_photo_path(stored: str) -> str:
+    """Map a Colab or absolute cache path onto the local data/raw tree when that file exists."""
+    norm = stored.replace("\\", "/")
+    key = "/data/raw/"
+    i = norm.lower().find(key)
+    if i >= 0:
+        local = DATA_DIR / norm[i + len("/data/"):]
+        if local.is_file():
+            return str(local)
+    return stored
 
 
 @lru_cache(maxsize=1)
 def _reference_library():
     if not EMBED_CACHE.exists():
         raise RuntimeError(f"embedding cache not found at {EMBED_CACHE}")
+    data = np.load(EMBED_CACHE, allow_pickle=True)
+    if "vectors" in data.files and "labels" in data.files:
+        feats = np.asarray(data["vectors"], dtype=np.float32)
+        labels = [str(x).replace("_", " ") for x in data["labels"].tolist()]
+        paths = [_local_photo_path(str(x)) for x in data["paths"].tolist()]
+        return feats, labels, paths
+
+    if "feats" not in data.files:
+        raise RuntimeError(
+            f"{EMBED_CACHE.name} has keys {list(data.files)}; expected vectors+labels or feats."
+        )
     if not INDEX_CSV.exists():
         raise RuntimeError(f"index CSV not found at {INDEX_CSV}")
-    data = np.load(EMBED_CACHE, allow_pickle=True)
     cached = dict(zip(data["paths"].tolist(), data["feats"]))
     with INDEX_CSV.open(encoding="utf-8", newline="") as f:
         rows = [r for r in csv.DictReader(f) if r["phase"] == "Raw" and r["relative_path"] in cached]
+    if not rows:
+        raise RuntimeError(f"no Raw rows in {INDEX_CSV.name} match paths in {EMBED_CACHE.name}")
     feats = np.stack([cached[r["relative_path"]] for r in rows])
     labels = [r["class"].replace("_", " ") for r in rows]
     paths = [r["relative_path"] for r in rows]
     return feats, labels, paths
 
 
-def _approved_by_label() -> dict[str, dict]:
+def _approved_by_label(crop: str) -> dict[str, dict]:
+    """Approved records for one crop, keyed by lower-case condition name."""
     out: dict[str, dict] = {}
     for rec in store.approved_records():
-        if rec.get("crop", "").lower() == CROP:
-            out.setdefault(rec.get("condition", "").lower(), rec)
+        if (rec.get("crop") or "").lower() == crop:
+            out.setdefault((rec.get("condition") or "").lower(), rec)
     return out
 
 
-def match_image(image_path: str, top_k: int = TOP_K) -> list[dict]:
-    """Top-k reference photos for one uploaded image, restricted to approved classes."""
+def _channel(image_path: str | None, text: str | None) -> str:
+    if image_path and text and text.strip():
+        return "image_text_fused"
+    if image_path:
+        return "image_only_fused"
+    return "text_fused"
+
+
+def _search(image_path: str | None, text: str | None, crop: str | None, top_k: int) -> list[dict]:
+    crop = (crop or CROP).lower()
     feats, labels, paths = _reference_library()
-    by_label = _approved_by_label()
+    by_label = _approved_by_label(crop)
     link = {}
     for rec in store.approved_records():
+        if (rec.get("crop") or "").lower() != crop:
+            continue
         for img in rec.get("images") or []:
             if img.get("image_path"):
                 link[img["image_path"]] = rec
@@ -52,14 +97,27 @@ def match_image(image_path: str, top_k: int = TOP_K) -> list[dict]:
     usable = [i for i, lab in enumerate(labels) if lab.lower() in by_label]
     if not usable:
         return []
-    idx = np.array(usable)
-    q = embed_image_file(image_path)
+
+    item = {}
+    if image_path:
+        item["image"] = image_path
+    if text and text.strip():
+        item["text"] = text.strip()
+    if not item:
+        raise ValueError("query needs an image, text, or both")
+
+    q = embed_multimodal([item])[0]
     if q.shape[0] != feats.shape[1]:
         raise RuntimeError(
             f"embedding cache has {feats.shape[1]}-d vectors but the model gives {q.shape[0]}-d. "
-            "Rebuild the cache with scripts/evaluate_retrieval.py (or fix PH_EMBED_MODEL / PH_EMBED_CACHE_NAME).")
+            "Rebuild the cache with the same model, or fix PH_EMBED_BACKEND / PH_EMBED_CACHE_NAME."
+        )
+
+    idx = np.array(usable)
     sims = feats[idx] @ q
     order = np.argsort(-sims)[:top_k]
+    channel = _channel(image_path, text)
+
     out = []
     for j in order:
         i = idx[j]
@@ -69,9 +127,40 @@ def match_image(image_path: str, top_k: int = TOP_K) -> list[dict]:
             "class": labels[i],
             "similarity": round(float(sims[j]), 3),
             "record": rec,
-            "channel": "image_to_image",
+            "channel": channel,
         })
     return out
+
+
+def match_image(image_path: str, top_k: int = TOP_K, text: str | None = None,
+                crop: str | None = None) -> list[dict]:
+    """Photo (optionally with farmer text) searched against the fused cache."""
+    return _search(image_path, text, crop, top_k)
+
+
+def match_text(text: str, top_k: int = TOP_K, crop: str | None = None) -> list[dict]:
+    """Farmer text only. Keeps only classes whose best score clears TEXT_ONLY_MIN_SIMILARITY
+    and is within TEXT_CLASS_MARGIN of the top class, and at most TEXT_PHOTOS_PER_CLASS
+    photos per class. Photos keep the cache order (highest score first)."""
+    pool = _search(None, text, crop, top_k=max(top_k * 4, 40))
+    if not pool:
+        return []
+    best_by_class: dict[str, float] = {}
+    for m in pool:
+        best_by_class[m["class"]] = max(best_by_class.get(m["class"], 0.0), m["similarity"])
+    top_score = max(best_by_class.values())
+    keep = {
+        c for c, s in best_by_class.items()
+        if s >= TEXT_ONLY_MIN_SIMILARITY and s >= top_score - TEXT_CLASS_MARGIN
+    }
+    out, per_class = [], {}
+    for m in pool:
+        if m["class"] not in keep:
+            continue
+        per_class[m["class"]] = per_class.get(m["class"], 0) + 1
+        if per_class[m["class"]] <= TEXT_PHOTOS_PER_CLASS:
+            out.append(m)
+    return out[:top_k]
 
 
 def evidence_from_matches(matches: list[dict]) -> list[dict]:
@@ -86,7 +175,7 @@ def evidence_from_matches(matches: list[dict]) -> list[dict]:
         "reviewed_by": m["record"].get("reviewed_by"),
         "reviewed_on": m["record"].get("reviewed_on"),
         "similarity": m["similarity"],
-        "channel": m.get("channel") or "image_to_image",
+        "channel": m.get("channel") or "image_only_fused",
         "label_basis": m["record"].get("label_basis"),
     } for m in matches]
 

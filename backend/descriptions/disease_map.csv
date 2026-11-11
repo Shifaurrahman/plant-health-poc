@@ -1,0 +1,18 @@
+folder,crop,disease_name,is_healthy,description_file
+Bacterial_Blight,brinjal,Bacterial Blight,no,Bacterial_Blight.txt
+Bacterial_Leaf_Spot,brinjal,Bacterial Leaf Spot,no,Bacterial_Leaf_Spot.txt
+Bacterial_Wilt,brinjal,Bacterial Wilt,no,Bacterial_Wilt.txt
+Cercospora_Leaf_Spot,brinjal,Cercospora Leaf Spot,no,Cercospora_Leaf_Spot.txt
+Healthy,brinjal,Healthy,yes,Healthy.txt
+Little_Leaf,brinjal,Little Leaf,no,Little_Leaf.txt
+Mosaic_Virus,brinjal,Mosaic Virus,no,Mosaic_Virus.txt
+Powdery_Mildew,brinjal,Powdery Mildew,no,Powdery_Mildew.txt
+Tomato_leaf,tomato,Healthy,yes,Tomato_leaf.txt
+Tomato_leaf_bacterial_spot,tomato,Bacterial Spot,no,Tomato_leaf_bacterial_spot.txt
+Tomato_leaf_late_blight,tomato,Late Blight,no,Tomato_leaf_late_blight.txt
+Tomato_leaf_mosaic_virus,tomato,Mosaic Virus,no,Tomato_leaf_mosaic_virus.txt
+Tomato_leaf_yellow_virus,tomato,Yellow Leaf Curl Virus,no,Tomato_leaf_yellow_virus.txt
+Tomato_Early_blight_leaf,tomato,Early Blight,no,Tomato_Early_blight_leaf.txt
+Tomato_Septoria_leaf_spot,tomato,Septoria Leaf Spot,no,Tomato_Septoria_leaf_spot.txt
+Tomato_mold_leaf,tomato,Leaf Mold,no,Tomato_mold_leaf.txt
+Tomato_two_spotted_spider_mites_leaf,tomato,Two-Spotted Spider Mites,no,Tomato_two_spotted_spider_mites_leaf.txt

@@ -23,6 +23,7 @@ BASE_LIMITATIONS = [
 ]
 STUB_NOTE = "Visual analysis is not configured, so the observations are placeholders."
 WEAK_PHOTO_NOTE = "No reference photo was similar enough to the upload to compare."
+TEXT_ONLY_NOTE = "Text only: no photo was checked, so no visual fit is given. Matches show what the words are closest to."
 
 OUTCOMES = {
     "match": {
@@ -47,7 +48,7 @@ OUTCOMES = {
     },
     "text_only_match": {
         "next_step": "Text matches only. Upload a photo of the affected leaf to compare with reference photos.",
-        "limitation": "Text matching cannot see the plant. Model knowledge is labelled separately from reviewed records.",
+        "limitation": "Text matching cannot see the plant. Matches are based on the words, not on the leaf.",
     },
     "conflict": {
         "next_step": "The photo and the reference records disagree, so no cause is suggested. Send a close-up of both leaf surfaces and a whole-plant photo, and ask a local plant health adviser.",
@@ -58,6 +59,26 @@ OUTCOMES = {
         "limitation": "The knowledge base has no matching reviewed material for this question.",
     },
 }
+
+HEADLINES = {
+    "match": "Likely match",
+    "unknown_cause": "No single cause stands out",
+    "healthy_appearance": "Looks healthy",
+    "conflict": "Photo and records disagree",
+    "text_only_match": "Text matches only",
+    "no_match": "No approved match",
+    "insufficient_image": "Photo not clear enough",
+    "unsupported_crop": "Crop not supported",
+}
+
+
+def _headline(outcome: str, matches: list[dict]) -> str:
+    """Short label for the top of the answer. A unanimous photo vote is named, not called 'no single cause'."""
+    if outcome == "unknown_cause" and matches:
+        top, n = Counter(m["class"] for m in matches).most_common(1)[0]
+        if n == len(matches) and len(matches) >= PHOTO_MIN_VOTES:
+            return f"Photo matches {top} references. Not confirmed; needs a description or close-up."
+    return HEADLINES.get(outcome, outcome)
 
 
 def decide_outcome(crop_ok: bool, image_paths: list[str], quality_issues: list[list[str]],
@@ -96,16 +117,19 @@ def verdict_to_outcome(verdict: dict, healthy_photo: bool) -> str:
     return "unknown_cause"
 
 
-def apply_fit_check(draft: dict, outcome: str) -> tuple[str, dict]:
-    """Use the model's per-candidate fit. All candidates poor -> conflict. Otherwise drop poor-fit ones."""
+def apply_fit_check(draft: dict, outcome: str, protected: set[str]) -> tuple[str, dict]:
+    """Apply the model's per-candidate fit. Candidates the expert verdict selected are protected
+    from removal by the model, but are still labelled with the model's fit so the UI can show it."""
     causes = draft.get("candidate_causes") or []
-    if causes and all(c.get("fit") == "poor" for c in causes):
+    rejectable = [c for c in causes if c.get("name") not in protected]
+    poor = [c for c in rejectable if c.get("fit") == "poor"]
+    if causes and len(poor) == len(causes):
         draft["rejected_candidates"] = [c["name"] for c in causes]
         draft["candidate_causes"] = []
         return "conflict", draft
-    if any(c.get("fit") == "poor" for c in causes):
-        draft["rejected_candidates"] = [c["name"] for c in causes if c.get("fit") == "poor"]
-        draft["candidate_causes"] = [c for c in causes if c.get("fit") != "poor"]
+    if poor:
+        draft["rejected_candidates"] = [c["name"] for c in poor]
+        draft["candidate_causes"] = [c for c in causes if c not in poor]
     return outcome, draft
 
 
@@ -116,6 +140,41 @@ def _outcome_next_step(outcome: str) -> str:
             "Consult a local plant health adviser for other crops."
         )
     return OUTCOMES[outcome]["next_step"] or "Confirm with a local plant health expert."
+
+
+def _text_candidates(text_matches: list[dict]) -> list[dict]:
+    """Candidates for a text-only query. No fit value: nothing was checked against a photo."""
+    by_class: dict[str, list[dict]] = {}
+    for m in text_matches:
+        by_class.setdefault(m["class"], []).append(m)
+    ranked = sorted(by_class.items(), key=lambda kv: -max(x["similarity"] for x in kv[1]))
+    out = []
+    for label, ms in ranked[:MAX_CANDIDATE_CAUSES]:
+        best = max(x["similarity"] for x in ms)
+        out.append({
+            "name": label,
+            "support": [f"Closest to the farmer's words (text score {best:.2f})"],
+            "against_or_missing": [
+                "Text only: no photo was checked",
+                "Not confirmed by inspection or lab test",
+            ],
+            "evidence_ids": [x["id"] for x in ms],
+        })
+    return out
+
+
+def _text_draft(candidates: list[dict], outcome: str) -> dict:
+    """Template answer for text-only queries. No VLM, no general knowledge."""
+    questions = [
+        "Can you upload a close-up photo of the affected leaf, showing both surfaces?",
+        "Can you upload a whole-plant photo, so the spread can be seen?",
+    ]
+    return {
+        "candidate_causes": candidates,
+        "alternatives": [],
+        "questions": questions[:MAX_QUESTIONS],
+        "next_step": _outcome_next_step(outcome),
+    }
 
 
 def fallback_draft(image_candidates, text_evidence, has_images, meta, outcome, extra_questions) -> dict:
@@ -194,7 +253,7 @@ def _enrich(evidence: list[dict]) -> list[dict]:
 def _keep_evidence(pool: list[dict], candidate_names: set[str], has_user_text: bool) -> list[dict]:
     """Decide which evidence may be shown.
 
-    - Photo evidence is always kept (it already passed PHOTO_MIN_SIMILARITY).
+    - Photo evidence is always kept (it already passed its similarity floor).
     - A text record is kept if it is a candidate cause.
     - Otherwise a text record is kept only when the farmer typed words that matched it.
     """
@@ -269,6 +328,26 @@ def _coverage(candidates: list[dict], image_candidate_names: set[str], evidence:
     return "partial" if (image_backed or text_backed) else "none"
 
 
+def _restore_retrieval_candidates(draft: dict, image_candidates: list[dict]) -> None:
+    """Retrieval decides which candidates exist. If the model returned none, keep the retrieval candidates."""
+    if not draft.get("candidate_causes"):
+        draft["candidate_causes"] = [
+            {**c, "fit": c.get("fit", "partial")} for c in image_candidates[:MAX_CANDIDATE_CAUSES]
+        ]
+
+
+def _clean_alternatives(draft: dict) -> None:
+    """An alternative must not repeat a candidate, and must be unique."""
+    candidate_names = {c["name"] for c in draft.get("candidate_causes") or []}
+    seen, out = set(), []
+    for a in draft.get("alternatives") or []:
+        if a in candidate_names or a in seen:
+            continue
+        seen.add(a)
+        out.append(a)
+    draft["alternatives"] = out[:MAX_ALTERNATIVES]
+
+
 def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues: list[list[str]]) -> dict:
     t0 = time.perf_counter()
     meta = case["meta"]
@@ -280,6 +359,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     user_text = (text or "").strip()
     has_user_text = bool(user_text)
     request_route = route(case, text, len(image_paths))
+    summary = case.get("summary") or {}
 
     analysis_images = list(image_paths)
     analysis_quality = list(quality_issues)
@@ -289,46 +369,70 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
 
     skip_vision = request_route == "text_qa" and not image_paths
     usable = [] if skip_vision else [p for p, issues in zip(analysis_images, analysis_quality) if not issues]
+    # Text-only: the farmer typed something and no usable photo is available.
+    text_only = has_user_text and not usable
 
-    observations = [] if skip_vision else vlm.observe(analysis_images, text, meta)
+    observations = [] if (skip_vision or text_only) else vlm.observe(analysis_images, text, meta)
 
-    # ---- photo matching, then the similarity floor ----
+    # ---- photo matching (photo, or photo + text, against the fused cache) ----
     t_img = time.perf_counter()
     raw_matches, errors = [], []
-    if crop_ok and not skip_vision:
+    if crop_ok and usable:
         for p in usable:
             try:
-                raw_matches.extend(image_retrieval.match_image(p))
+                raw_matches.extend(image_retrieval.match_image(p, text=user_text or None, crop=crop))
             except Exception as e:  # report the failure instead of failing the whole request
                 errors.append(f"Image matching failed for one photo: {e}")
     matches = [m for m in raw_matches if m["similarity"] >= PHOTO_MIN_SIMILARITY]
     image_ms = round((time.perf_counter() - t_img) * 1000)
 
-    # ---- text channels (gated on what the farmer actually typed) ----
+    # ---- text-only search (same fused cache, text embedded by embed_multimodal) ----
     t_txt = time.perf_counter()
-    summary = case.get("summary") or {}
-    query = _query_text(user_text, meta, summary) if has_user_text else ""
-    # Hard crop filter only when the user confirmed crop; otherwise soft (no filter).
-    crop_filter = crop_raw if crop_raw and crop_ok else (crop if crop_ok and not crop_uncertain else None)
-    keyword_ev, channel_diag = retrieval.search_channels(
-        query, crop=crop_filter, k=CHANNEL_K,
-        image_paths=usable or None, user_text=user_text,
-    )
-    semantic_pool = channel_diag.get("semantic") or []
-    image_text_pool = channel_diag.get("image_to_text") or []
+    text_matches: list[dict] = []
+    text_cands: list[dict] = []
+    if crop_ok and text_only:
+        try:
+            text_matches = image_retrieval.match_text(user_text, crop=crop)
+            text_cands = _text_candidates(text_matches)
+        except Exception as e:
+            errors.append(f"Text matching failed: {e}")
+
+    # ---- old text channels: only for cases that have a photo ----
+    keyword_ev, semantic_pool, image_text_pool, channel_diag = [], [], [], {}
+    if not text_only:
+        query = _query_text(user_text, meta, summary) if has_user_text else ""
+        crop_filter = crop_raw if crop_raw and crop_ok else (crop if crop_ok and not crop_uncertain else None)
+        keyword_ev, channel_diag = retrieval.search_channels(
+            query, crop=crop_filter, k=CHANNEL_K,
+            image_paths=usable or None, user_text=user_text,
+        )
+        semantic_pool = channel_diag.get("semantic") or []
+        image_text_pool = channel_diag.get("image_to_text") or []
     text_ms = round((time.perf_counter() - t_txt) * 1000)
 
-    # ---- expert verdict: photo votes and selected text records decide the outcome ----
-    photo_votes = Counter(m["record"]["condition"] for m in matches)
-    text_conditions = [e["condition"] for e in semantic_pool]
-    verdict = expert.decide(photo_votes, len(matches), text_conditions, has_user_text)
-    healthy_photo = verdict["candidates"] == [HEALTHY_CLASS]
+    # ---- verdict: text-only uses the text matches; photo cases use the expert rules ----
+    if text_only:
+        verdict = {
+            "verdict": "text_only",
+            "candidates": [c["name"] for c in text_cands],
+            "reasons": [],
+            "checks_needed": [],
+            "text_conditions": [],
+        }
+        healthy_photo = False
+    else:
+        photo_votes = Counter(m["record"]["condition"] for m in matches)
+        text_conditions = [e["condition"] for e in semantic_pool]
+        verdict = expert.decide(photo_votes, len(matches), text_conditions, has_user_text)
+        healthy_photo = verdict["candidates"] == [HEALTHY_CLASS]
 
     diagnostics = {
         "route": request_route,
+        "text_only": text_only,
         "photo_matches_raw": len(raw_matches),
         "photo_matches_passing": len(matches),
         "photo_min_similarity": PHOTO_MIN_SIMILARITY,
+        "text_matches": len(text_matches),
         "expert_verdict": verdict["verdict"],
         "text_channels": {
             "typed_text": has_user_text,
@@ -341,7 +445,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
         },
     }
 
-    # ---- outcome: quality checks first, then the expert verdict ----
+    # ---- outcome: quality checks first, then the verdict ----
     gate = decide_outcome(
         crop_ok,
         analysis_images if not skip_vision else [],
@@ -352,60 +456,73 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     )
     if gate in ("unsupported_crop", "insufficient_image"):
         outcome = gate
+    elif text_only:
+        outcome = "text_only_match" if text_matches else "no_match"
     elif skip_vision:
-        outcome = "text_only_match" if semantic_pool else "no_match"
+        outcome = "no_match"
     else:
         outcome = verdict_to_outcome(verdict, healthy_photo)
 
-    # ---- candidates and first-pass evidence ----
+    # ---- candidates and evidence ----
     if outcome in ("unsupported_crop", "insufficient_image"):
-        image_candidates = []
-        image_ev = []
+        image_candidates, image_ev = [], []
+    elif text_only:
+        image_candidates = text_cands
+        image_ev = image_retrieval.evidence_from_matches(text_matches)
     else:
         image_candidates = image_retrieval.candidates_from_matches(matches)
         image_ev = image_retrieval.evidence_from_matches(matches)
-    # Only the candidates the expert verdict keeps may appear as image candidates.
-    if verdict["candidates"]:
-        image_candidates = [c for c in image_candidates if c["name"] in verdict["candidates"]]
+        if verdict["candidates"]:
+            image_candidates = [c for c in image_candidates if c["name"] in verdict["candidates"]]
     image_names = {c["name"] for c in image_candidates}
 
     pools = [image_ev, keyword_ev, semantic_pool, image_text_pool]
     selected = select_evidence([_keep_evidence(p, image_names, has_user_text) for p in pools])
     evidence = _enrich(selected)
 
-    extra_q = quality_questions(len(analysis_images), analysis_quality, outcome)
-    draft = None if skip_vision else vlm.synthesize(meta, text, observations, evidence, outcome, summary)
-
-    if draft is None:
-        draft = fallback_draft(image_candidates, semantic_pool, bool(analysis_images), meta, outcome, extra_q)
+    # ---- draft: text-only is a template; photo cases use the VLM with the fit check ----
+    extra_q = [] if text_only else quality_questions(len(analysis_images), analysis_quality, outcome)
+    if text_only:
+        draft = _text_draft(image_candidates, outcome)
     else:
-        outcome, draft = apply_fit_check(draft, outcome)
-        if outcome == "conflict":
-            draft["next_step"] = _outcome_next_step("conflict")
-        for q in extra_q:
-            if q not in draft["questions"] and len(draft["questions"]) < MAX_QUESTIONS:
-                draft["questions"].append(q)
+        draft = None if skip_vision else vlm.synthesize(meta, text, observations, evidence, outcome, summary)
+        if draft is None:
+            draft = fallback_draft(image_candidates, semantic_pool, bool(analysis_images), meta, outcome, extra_q)
+        else:
+            # The model may word the answer, but retrieval decides which candidates exist.
+            _restore_retrieval_candidates(draft, image_candidates)
+            outcome, draft = apply_fit_check(draft, outcome, protected=set(verdict["candidates"]))
+            if outcome == "conflict":
+                draft["next_step"] = _outcome_next_step("conflict")
+            for q in extra_q:
+                if q not in draft["questions"] and len(draft["questions"]) < MAX_QUESTIONS:
+                    draft["questions"].append(q)
 
-        # Re-link evidence against the candidates the model actually kept.
-        final_names = {c["name"] for c in draft["candidate_causes"]}
-        known = {(e.get("condition") or e.get("title") or "").lower() for e in evidence}
-        extra = _second_round_items(query, meta.get("crop") or crop, draft, known, user_text)
-        evidence = _enrich(select_evidence(
-            [_keep_evidence(p, final_names, has_user_text) for p in pools + [extra]]
-        ))
+            final_names = {c["name"] for c in draft["candidate_causes"]}
+            known = {(e.get("condition") or e.get("title") or "").lower() for e in evidence}
+            extra = _second_round_items(_query_text(user_text, meta, summary), meta.get("crop") or crop,
+                                        draft, known, user_text)
+            evidence = _enrich(select_evidence(
+                [_keep_evidence(p, final_names, has_user_text) for p in pools + [extra]]
+            ))
+
+    _clean_alternatives(draft)
 
     # ---- limitations ----
     limitations = list(BASE_LIMITATIONS)
-    if vlm.name == "stub":
-        limitations.append(STUB_NOTE)
-    for msg in [vlm.config_error, *vlm.errors()]:
-        if msg:
-            limitations.append(msg)
+    if text_only:
+        limitations.append(TEXT_ONLY_NOTE)
+    else:
+        if vlm.name == "stub":
+            limitations.append(STUB_NOTE)
+        for msg in [vlm.config_error, *vlm.errors()]:
+            if msg:
+                limitations.append(msg)
     for n, issues in enumerate(quality_issues, start=1):
         for issue in issues:
             limitations.append(f"Photo {n}: {issue}")
     limitations += errors
-    if raw_matches and not matches:
+    if raw_matches and not matches and not text_only:
         limitations.append(WEAK_PHOTO_NOTE)
     if crop_uncertain:
         limitations.append(
@@ -416,7 +533,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     limitations += verdict["reasons"]
     if outcome == "unsupported_crop":
         draft["next_step"] = _outcome_next_step("unsupported_crop")
-    for lim in record_limitations(matches):
+    for lim in record_limitations(matches or text_matches):
         if lim not in limitations:
             limitations.append(lim)
     for name in draft.get("rejected_candidates", []):
@@ -431,8 +548,12 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
 
     draft, removed = validator.validate(draft, evidence)
 
-    coverage = _coverage(draft["candidate_causes"], image_names, evidence)
-    best = max((m["similarity"] for m in raw_matches), default=None)
+    if text_only:
+        coverage = "partial" if draft["candidate_causes"] else "none"
+    else:
+        coverage = _coverage(draft["candidate_causes"], image_names, evidence)
+    best_pool = text_matches if text_only else raw_matches
+    best = max((m["similarity"] for m in best_pool), default=None)
     versions = current_versions(vlm.name, len(store.approved_records()))
     versions["model"] = vlm.model_name
     versions["prompt"] = vlm.prompt_version
@@ -449,6 +570,7 @@ def run_assessment(case: dict, text: str, image_paths: list[str], quality_issues
     return {
         "route": request_route,
         "outcome": outcome,
+        "headline": _headline(outcome, matches),
         "expert": verdict,
         "observations": observations,
         "candidate_causes": draft["candidate_causes"],

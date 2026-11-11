@@ -1,3 +1,12 @@
 {"case_id": "9f64df9c3aa0", "crop": "brinjal", "outcome": "no_match", "question": "", "reason": "no matching reviewed material", "at": "2026-11-03T06:01:31.282699+00:00"}
 {"case_id": "2f8500f2d089", "crop": "brinjal", "outcome": "no_match", "question": "", "reason": "no matching reviewed material", "at": "2026-11-06T09:08:29.877036+00:00"}
 {"case_id": "b143251aa5a2", "crop": "brinjal", "outcome": "no_match", "question": "", "reason": "no matching reviewed material", "at": "2026-11-06T09:10:53.293365+00:00"}
+{"case_id": "060c6ff02b1c", "crop": "brinjal", "outcome": "unknown_cause", "question": "", "reason": "unknown_cause", "at": "2026-11-10T07:34:04.611554+00:00"}
+{"case_id": "1710a61776d6", "crop": "brinjal", "outcome": "unknown_cause", "question": "", "reason": "unknown_cause", "at": "2026-11-10T07:35:22.363156+00:00"}
+{"case_id": "7ffdddb0efef", "crop": "brinjal", "outcome": "unknown_cause", "question": "", "reason": "unknown_cause", "at": "2026-11-10T08:00:46.418222+00:00"}
+{"case_id": "e90ec204308f", "crop": "brinjal", "outcome": "unknown_cause", "question": "", "reason": "unknown_cause", "at": "2026-11-10T08:16:22.203430+00:00"}
+{"case_id": "3231d607ec9b", "crop": "brinjal", "outcome": "insufficient_image", "question": "Small dark brown spots with a yellow ring, and the edges look dry.", "reason": "insufficient_image", "at": "2026-11-11T05:50:01.584542+00:00"}
+{"case_id": "b957c3850d9e", "crop": "brinjal", "outcome": "insufficient_image", "question": "Small dark brown spots with a yellow ring, and the edges look dry.", "reason": "insufficient_image", "at": "2026-11-11T05:54:00.083919+00:00"}
+{"case_id": "a009febcd586", "crop": "brinjal", "outcome": "unknown_cause", "question": "Leaves are getting very small and thin, and the plant looks stunted with many small leaves bunched together.", "reason": "unknown_cause", "at": "2026-11-11T05:58:16.310599+00:00"}
+{"case_id": "666c0d41ac58", "crop": "brinjal", "outcome": "unknown_cause", "question": "Water-soaked spots on the leaves are spreading, and some leaves are turning brown and drying out.", "reason": "unknown_cause", "at": "2026-11-11T06:03:19.276652+00:00"}
+{"case_id": "34cba593fedb", "crop": "brinjal", "outcome": "unknown_cause", "question": "Water-soaked spots on the leaves are spreading, and some leaves are turning brown and drying out", "reason": "unknown_cause", "at": "2026-11-11T06:09:23.137511+00:00"}

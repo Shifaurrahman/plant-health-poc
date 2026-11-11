@@ -95,7 +95,9 @@ MAX_RETRIEVAL_ROUNDS = _env_int("PH_MAX_RETRIEVAL_ROUNDS", 1)
 # ---- match thresholds (calibrate on held-out photos; defaults keep the old behaviour) ----
 PHOTO_MIN_SIMILARITY = _env_float("PH_PHOTO_MIN_SIMILARITY", 0.0)  # photo matches below this don't vote
 PHOTO_MIN_VOTES = _env_int("PH_PHOTO_MIN_VOTES", 3)                # fewer surviving matches -> unknown_cause
-SEMANTIC_MIN_SCORE = _env_float("PH_SEMANTIC_MIN_SCORE", 0.0)      # text and image-to-text hits below this are dropped
+SEMANTIC_MIN_SCORE = _env_float("PH_SEMANTIC_MIN_SCORE", 0.75)      # text and image-to-text hits below this are dropped
+TEXT_ONLY_MIN_SIMILARITY = _env_float("PH_TEXT_ONLY_MIN_SIMILARITY", 0.75)  # text-only classes below this are dropped
+TEXT_CLASS_MARGIN = _env_float("PH_TEXT_CLASS_MARGIN", 0.03)                # keep classes within this of the top class
 
 # ---- text relevance (model decides which shortlisted records match the farmer's words) ----
 RELEVANCE_PROVIDER = _env("PH_RELEVANCE_PROVIDER", "none").lower()   # none | anthropic

@@ -31,7 +31,11 @@ def _unit(x) -> np.ndarray:
 @lru_cache(maxsize=1)
 def _load_gemma2():
     from sentence_transformers import SentenceTransformer
-    dtype = getattr(torch, GEMMA2_DTYPE)
+    dtype = getattr(torch, GEMMA2_DTYPE, None)
+    if dtype is None or not isinstance(dtype, torch.dtype):
+        raise ValueError(
+            f"PH_GEMMA2_DTYPE={GEMMA2_DTYPE!r} is not a torch dtype. Use bfloat16 or float32."
+        )
     if dtype == torch.float16:
         raise ValueError("EmbeddingGemma must not run in float16.")
     return SentenceTransformer(GEMMA2_MODEL, model_kwargs={"torch_dtype": dtype})
@@ -45,7 +49,7 @@ def _gemma2_encode(inputs) -> np.ndarray:
     return _unit(out)
 
 
-# ---------------- Qwen3-VL (unchanged) ----------------
+# ---------------- Qwen3-VL ----------------
 @lru_cache(maxsize=1)
 def _load_qwen():
     if QWEN_REPO_DIR and QWEN_REPO_DIR not in sys.path:
@@ -83,3 +87,26 @@ def encode_query(texts: list[str]) -> np.ndarray:
     if EMBED_BACKEND == "gemma2":
         return _gemma2_encode([GEMMA2_QUERY_PREFIX + t for t in texts])
     return _qwen_embed([{"text": t, "instruction": EMBED_QUERY_INSTRUCTION} for t in texts])
+
+
+def embed_multimodal(items: list[dict]) -> np.ndarray:
+    """One unit vector per item. Each item is {"image": path}, {"text": str}, or both.
+
+    The same joint space is used for all three, so any query can be searched
+    against the fused cache (manual_multimodal_embeddinggemma-2.npz).
+    """
+    packed = []
+    for it in items:
+        d = {}
+        if it.get("image"):
+            d["image"] = str(it["image"])
+        if it.get("text") and str(it["text"]).strip():
+            d["text"] = str(it["text"]).strip()
+        if not d:
+            raise ValueError("each item needs an image, text, or both")
+        packed.append(d)
+    if EMBED_BACKEND == "gemma2":
+        if all(set(d) == {"text"} for d in packed):
+            return _gemma2_encode([d["text"] for d in packed])
+        return _gemma2_encode(packed)
+    return _qwen_embed(packed)

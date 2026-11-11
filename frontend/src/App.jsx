@@ -20,10 +20,10 @@ function uploadUrl(path) {
   return `${API}/uploads/${caseId}/${name}`;
 }
 
-function OutcomeBanner({ outcome, route }) {
+function OutcomeBanner({ outcome, route, headline }) {
   return (
     <section className="card banner">
-      <strong>{OUTCOME_TITLE[outcome] ?? outcome}</strong>
+      <strong>{headline || OUTCOME_TITLE[outcome] || outcome}</strong>
       {route && <div className="muted">Route: {route.replace("_", " ")}</div>}
     </section>
   );
@@ -79,7 +79,7 @@ function AssessmentBody({ data }) {
   const texts = (data.retrieved_evidence || []).filter((e) => e.type === "text");
   return (
     <div className="grid">
-      <OutcomeBanner outcome={data.outcome} route={data.route} />
+      <OutcomeBanner outcome={data.outcome} route={data.route} headline={data.headline} />
       {data.observations?.length > 0 && (
         <section className="card">
           <h3>What the photo shows</h3>
@@ -347,6 +347,7 @@ function NewAssessment({ onCreated }) {
         <div className="grid two">
           <label>Crop<select value={crop} onChange={(e) => setCrop(e.target.value)}>
             <option value="brinjal">Brinjal</option>
+            <option value="tomato">Tomato</option>
             <option value="other">Other (unsupported in this pilot)</option>
           </select></label>
           <label>Region<input type="text" value={region} onChange={(e) => setRegion(e.target.value)} /></label>
@@ -465,7 +466,7 @@ function CaseScreen({ caseId, onMissing }) {
             </>
           ) : (
             <details className="card">
-              <summary>Previous assessment: {OUTCOME_TITLE[t.assessment.outcome] || t.assessment.outcome}</summary>
+              <summary>Previous assessment: {t.assessment.headline || OUTCOME_TITLE[t.assessment.outcome] || t.assessment.outcome}</summary>
               <AssessmentBody data={t.assessment} />
             </details>
           )}
